@@ -30,6 +30,12 @@ FROM python:3.12-slim AS production
 RUN groupadd -g 1001 clickup && \
     useradd -u 1001 -g clickup -s /bin/sh -m clickup
 
+# Install curl — the deployment platform overrides the container health check with
+# `wget ... || curl ... || exit 1`, and python:3.12-slim ships neither wget nor curl,
+# so without this the container is reported permanently unhealthy.
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy virtual environment and source from builder
@@ -50,7 +56,7 @@ USER clickup
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+  CMD curl -fsS http://localhost:8080/health || exit 1
 
 CMD ["python", "-m", "clickup_mcp"]
 
