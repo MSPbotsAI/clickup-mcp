@@ -14,15 +14,16 @@ def _build_http_app(mcp, settings):
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "transport": "http", "auth_mode": settings.auth_mode})
 
-    mcp_app = mcp.streamable_http_app()
+    mcp_app = mcp.streamable_http_app()   # Starlette app owning the session-manager lifespan
+    mounted = GatewayTokenMiddleware(mcp_app, settings) if settings.auth_mode == "gateway" else mcp_app
 
-    if settings.auth_mode == "gateway":
-        mcp_app = GatewayTokenMiddleware(mcp_app, settings)
-
-    return Starlette(routes=[
-        Route("/health", health),
-        Mount("/", app=mcp_app),
-    ])
+    # Mount() does NOT run a sub-app's lifespan, so the streamable-http session
+    # manager's task group would never start ("Task group is not initialized").
+    # Propagate the MCP app's lifespan to the outer app explicitly.
+    return Starlette(
+        routes=[Route("/health", health), Mount("/", app=mounted)],
+        lifespan=lambda app: mcp_app.router.lifespan_context(app),
+    )
 
 
 def main() -> None:

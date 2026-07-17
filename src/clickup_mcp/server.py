@@ -3,6 +3,7 @@ import sys
 from collections.abc import Callable
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -76,7 +77,14 @@ class GatewayTokenMiddleware:
 
 def create_mcp_server(settings: Settings) -> FastMCP:
     """Build the FastMCP server instance and register all tools."""
-    mcp = FastMCP(name="clickup-mcp")
+    # The container runs on an internal docker network behind mcp-gateway, which
+    # forwards requests with Host: clickup-mcp:8080. The MCP SDK's DNS-rebinding
+    # protection (a browser-oriented safeguard) rejects that host with 421
+    # Misdirected Request, so disable it — the container is never exposed publicly.
+    mcp = FastMCP(
+        name="clickup-mcp",
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 
     client_factory: Callable[[], ClickUpClient | None] = lambda: get_client_from_context(settings)
 
