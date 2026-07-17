@@ -10,17 +10,38 @@ _NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AU
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
     @mcp.tool()
-    async def clickup_get_task(task_id: str) -> str:
-        """Get a ClickUp task by ID.
+    async def clickup_get_task(
+        task_id: str,
+        custom_task_ids: bool = False,
+        team_id: str | None = None,
+        include_subtasks: bool | None = None,
+        include_markdown_description: bool | None = None,
+    ) -> str:
+        """Get a ClickUp task by ID or by custom ID.
 
         Args:
-            task_id: The task ID.
+            task_id: The task ID, or the custom ID when custom_task_ids is True.
+            custom_task_ids: Set True to look up the task by its custom ID
+                (e.g. "ABC-123"). Requires team_id.
+            team_id: The workspace/team ID. Required when custom_task_ids is True.
+            include_subtasks: Include subtasks in the response.
+            include_markdown_description: Return the task description in Markdown.
         """
         client = client_factory()
         if client is None:
             return _NO_TOKEN
+        if custom_task_ids and not team_id:
+            return "Error: team_id is required when custom_task_ids is True."
+        params: dict = {}
+        if custom_task_ids:
+            params["custom_task_ids"] = "true"
+            params["team_id"] = team_id
+        if include_subtasks is not None:
+            params["include_subtasks"] = include_subtasks
+        if include_markdown_description is not None:
+            params["include_markdown_description"] = include_markdown_description
         try:
-            result = await client.get(f"/task/{task_id}")
+            result = await client.get(f"/task/{task_id}", params)
             return json.dumps(result, indent=2)
         except ClickUpError as e:
             return f"Error: {e}"
