@@ -72,7 +72,7 @@ uv run clickup-mcp
 # Each request must include: X-Clickup-Token: pk_xxxxx
 ```
 
-## Available Tools (22)
+## Available Tools (23)
 
 | Tool | Description |
 |------|-------------|
@@ -98,6 +98,7 @@ uv run clickup-mcp
 | `clickup_move_task` | Move task to a different list |
 | `clickup_get_task_comments` | Get task comments |
 | `clickup_create_task_comment` | Add a comment to a task |
+| `clickup_get_doc_page` | Get a single page from a Doc (v3) |
 
 ## API Reference
 

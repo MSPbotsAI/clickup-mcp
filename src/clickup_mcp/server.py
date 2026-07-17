@@ -109,7 +109,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         return mcp
 
     # Import and register all tool domains
-    from .tools import comments, folders, lists, spaces, tasks, workspaces
+    from .tools import comments, docs, folders, lists, spaces, tasks, workspaces
 
     workspaces.register(mcp, client_factory)
     spaces.register(mcp, client_factory)
@@ -117,5 +117,6 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     lists.register(mcp, client_factory)
     tasks.register(mcp, client_factory)
     comments.register(mcp, client_factory)
+    docs.register(mcp, client_factory)
 
     return mcp

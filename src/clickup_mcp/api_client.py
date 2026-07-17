@@ -30,10 +30,27 @@ class ClickUpClient:
             return {}
         return {k: v for k, v in params.items() if v is not None}
 
+    def _v3_base_url(self) -> str:
+        # Most endpoints are v2, but a few (e.g. Docs pages) live under v3.
+        # Derive the v3 base from the configured base by swapping a trailing /v2.
+        if self._base_url.endswith("/v2"):
+            return self._base_url[: -len("/v2")] + "/v3"
+        return self._base_url
+
     async def get(self, path: str, params: dict | None = None) -> Any:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._base_url}{path}",
+                headers=self._headers(),
+                params=self._clean_params(params),
+            )
+            self._raise_for_status(resp)
+            return resp.json() if resp.status_code != 204 else None
+
+    async def get_v3(self, path: str, params: dict | None = None) -> Any:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self._v3_base_url()}{path}",
                 headers=self._headers(),
                 params=self._clean_params(params),
             )
