@@ -12,5 +12,4 @@ build/
 .coverage
 htmlcov/
 tests/
-README.md
 docker-compose.yml
