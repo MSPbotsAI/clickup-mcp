@@ -1,3 +1,4 @@
+import base64
 from typing import Any
 
 import httpx
@@ -73,6 +74,20 @@ class ClickUpClient:
                 f"{self._base_url}{path}",
                 headers=self._headers(),
                 json=body,
+            )
+            self._raise_for_status(resp)
+            return resp.json() if resp.status_code != 204 else None
+
+    async def post_multipart(
+        self, path: str, field_name: str, file_content_base64: str, filename: str, params: dict | None = None
+    ) -> Any:
+        content = base64.b64decode(file_content_base64)
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}{path}",
+                headers={"Authorization": self._token},  # no Content-Type — httpx sets the multipart boundary
+                params=self._clean_params(params),
+                files={field_name: (filename, content)},
             )
             self._raise_for_status(resp)
             return resp.json() if resp.status_code != 204 else None
