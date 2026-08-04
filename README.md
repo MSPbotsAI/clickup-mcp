@@ -72,7 +72,7 @@ uv run clickup-mcp
 # Each request must include: X-Clickup-Token: pk_xxxxx
 ```
 
-## Available Tools (24)
+## Available Tools (25)
 
 | Tool | Description |
 |------|-------------|
@@ -100,6 +100,7 @@ uv run clickup-mcp
 | `clickup_create_task_comment` | Add a comment to a task |
 | `clickup_get_doc_page` | Get a single page from a Doc (v3) |
 | `clickup_attach_task_file` | Upload a file (e.g. an image) as an attachment on a task |
+| `clickup_create_comment_with_image` | Upload a file and post it inline inside a new task comment, in one call |
 
 ### Attachments and images
 
@@ -112,11 +113,22 @@ app. Confirmed by checking ClickUp's own official MCP server's tool
 descriptions too — same split (a `Create Task Comment` tool with no
 attachment support, and a separate `Attach File to Task` tool).
 
-**To make an image show up inline inside a comment**, use a two-step
-workaround: upload the file to the task first, then reference the
+**To make an image show up inline inside a comment**, the underlying
+trick is: upload the file to the task first, then reference the
 returned URL from the file's response using Markdown image syntax in
 the comment text — ClickUp's comment renderer inlines it as a real
-image, not just a link.
+image, not just a link. `clickup_create_comment_with_image` does both
+steps in one call:
+
+```
+clickup_create_comment_with_image(task_id, file_content_base64, filename)
+# internally:
+#   1. POST /task/{task_id}/attachment  -> {"url": "...", ...}
+#   2. POST /task/{task_id}/comment     comment_text = "![filename](url)"
+```
+
+To do it manually instead (e.g. to add other text around the image),
+call the two tools yourself:
 
 ```
 1. result = clickup_attach_task_file(task_id, file_content_base64, filename)

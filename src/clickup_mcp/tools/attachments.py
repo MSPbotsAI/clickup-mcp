@@ -53,3 +53,58 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             return json.dumps(result, indent=2)
         except ClickUpError as e:
             return f"Error: {e}"
+
+    @mcp.tool()
+    async def clickup_create_comment_with_image(
+        task_id: str,
+        file_content_base64: str,
+        filename: str,
+        comment_text: str | None = None,
+        notify_all: bool = False,
+        assignee: int | None = None,
+    ) -> str:
+        """Upload an image (or any file) and post it inline inside a new
+        task comment, in one call.
+
+        ClickUp's comment API has no attachment field of its own — this
+        tool uploads the file to the task first (POST
+        /task/{task_id}/attachment), then creates a comment (POST
+        /task/{task_id}/comment) whose text embeds the uploaded file's URL
+        using Markdown image syntax (`![filename](url)`), which ClickUp's
+        comment renderer displays as an inline image rather than a plain
+        link.
+
+        Args:
+            task_id: The task ID to attach the file to and comment on.
+            file_content_base64: Required. The file's raw bytes, base64-encoded.
+            filename: Required. The file name (e.g. "screenshot.png").
+            comment_text: Optional. Extra text to show above the image in
+                the comment.
+            notify_all: Notify all task assignees (default: False).
+            assignee: User ID to assign the task to when posting this comment.
+        """
+        client = client_factory()
+        if client is None:
+            return _NO_TOKEN
+        try:
+            attachment = await client.post_multipart(
+                f"/task/{task_id}/attachment",
+                field_name="attachment",
+                file_content_base64=file_content_base64,
+                filename=filename,
+            )
+        except ClickUpError as e:
+            return f"Error uploading file: {e}"
+        url = attachment.get("url") if isinstance(attachment, dict) else None
+        if not url:
+            return f"Error: upload succeeded but no url was returned: {json.dumps(attachment)}"
+        markdown_image = f"![{filename}]({url})"
+        full_text = f"{comment_text}\n\n{markdown_image}" if comment_text else markdown_image
+        body: dict = {"comment_text": full_text, "notify_all": notify_all}
+        if assignee is not None:
+            body["assignee"] = assignee
+        try:
+            comment_result = await client.post(f"/task/{task_id}/comment", body)
+        except ClickUpError as e:
+            return f"Error creating comment (file was uploaded successfully, url={url}): {e}"
+        return json.dumps({"attachment": attachment, "comment": comment_result}, indent=2)
