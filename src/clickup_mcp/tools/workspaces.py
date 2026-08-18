@@ -11,12 +11,21 @@ _NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AU
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
     @mcp.tool()
     async def clickup_get_workspaces() -> str:
-        """Get all ClickUp workspaces (teams) accessible with the current token."""
+        """Get all ClickUp workspaces (teams) accessible with the current token.
+
+        Returns each workspace's id/name/color/avatar. ClickUp's native
+        response also embeds a full member list per team; that is stripped
+        out here to keep the response small. To resolve a person to a
+        user_id, use clickup_list_members instead.
+        """
         client = client_factory()
         if client is None:
             return _NO_TOKEN
         try:
             result = await client.get("/team")
+            if isinstance(result, dict):
+                for team in result.get("teams", []) or []:
+                    team.pop("members", None)
             return json.dumps(result, indent=2)
         except ClickUpError as e:
             return f"Error: {e}"

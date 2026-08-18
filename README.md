@@ -107,14 +107,14 @@ uv run clickup-mcp
 
 ### Finding a person's ClickUp user ID
 
-`clickup_get_workspaces` already passes through ClickUp's native `GET /team`
-response unmodified, which includes each workspace's member list
-(`teams[].members[].user.{id,username,email}`) — so no new data source was
-needed. `clickup_list_members` is a thin, purpose-built projection of that
-same data (flattened to id/username/email/team_id/role) so callers don't
-have to dig the member list out of the full workspace/team object
-themselves. `clickup_list_tasks_for_person` uses the same underlying lookup
-internally to resolve `email` -> `user_id`.
+Use `clickup_list_members`. ClickUp's native `GET /team` response embeds a
+full member list per team (`teams[].members[].user.{id,username,email}`), but
+`clickup_get_workspaces` strips that out to keep its response small, so it is
+not the place to look up people. `clickup_list_members` reads the same
+underlying endpoint and projects the member list to a flat, purpose-built
+shape (id/username/email/team_id/role) so callers don't have to dig it out of
+the full workspace/team object themselves. `clickup_list_tasks_for_person`
+uses the same underlying lookup internally to resolve `email` -> `user_id`.
 
 Known gap: ClickUp's team-member object has no reliable "is this member
 deactivated" field — `clickup_list_members` does not return an `active`
