@@ -72,11 +72,12 @@ uv run clickup-mcp
 # Each request must include: X-Clickup-Token: pk_xxxxx
 ```
 
-## Available Tools (27)
+## Available Tools (28)
 
 | Tool | Description |
 |------|-------------|
 | `clickup_get_workspaces` | List all workspaces/teams |
+| `clickup_list_members` | List workspace members, flattened to id/username/email/team_id/role — resolve a person's email to the user_id `assignees` filters expect |
 | `clickup_list_spaces` | List spaces in a workspace |
 | `clickup_get_space` | Get space details |
 | `clickup_get_space_folders` | List folders in a space |
@@ -104,15 +105,22 @@ uv run clickup-mcp
 | `clickup_create_comment_with_image` | Upload a file and post it inline inside a new task comment, in one call |
 | `clickup_list_rocks_for_org` | List all EOS Rocks (quarterly goals) org-wide in one call, normalized to a fixed status enum |
 
-### Finding a person's ClickUp user ID (no dedicated tool needed)
+### Finding a person's ClickUp user ID
 
-`clickup_get_workspaces` passes through ClickUp's native `GET /team` response
-unmodified, which already includes each workspace's member list
-(`teams[].members[].user.{id,username,email}`) — there is no separate
-"list members" tool because none is needed. `clickup_list_tasks_for_person`
-uses this internally to resolve `email` -> `user_id`; call
-`clickup_get_workspaces` directly if you just need the member list itself
-(e.g. to map a person to their ID for some other purpose).
+`clickup_get_workspaces` already passes through ClickUp's native `GET /team`
+response unmodified, which includes each workspace's member list
+(`teams[].members[].user.{id,username,email}`) — so no new data source was
+needed. `clickup_list_members` is a thin, purpose-built projection of that
+same data (flattened to id/username/email/team_id/role) so callers don't
+have to dig the member list out of the full workspace/team object
+themselves. `clickup_list_tasks_for_person` uses the same underlying lookup
+internally to resolve `email` -> `user_id`.
+
+Known gap: ClickUp's team-member object has no reliable "is this member
+deactivated" field — `clickup_list_members` does not return an `active`
+field, since nothing real would back it (the only `status` field present
+on the raw object, `invited_by.status`, describes the inviter, not the
+member).
 
 ### `clickup_search_tasks` already returns `status.type`
 
