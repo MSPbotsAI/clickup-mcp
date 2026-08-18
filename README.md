@@ -72,7 +72,7 @@ uv run clickup-mcp
 # Each request must include: X-Clickup-Token: pk_xxxxx
 ```
 
-## Available Tools (25)
+## Available Tools (27)
 
 | Tool | Description |
 |------|-------------|
@@ -91,7 +91,8 @@ uv run clickup-mcp
 | `clickup_create_folderless_list` | Create list in a space |
 | `clickup_update_list` | Update a list |
 | `clickup_get_task` | Get task by ID |
-| `clickup_search_tasks` | Search tasks with filters |
+| `clickup_search_tasks` | Search tasks with filters (single workspace, team_id required) |
+| `clickup_list_tasks_for_person` | List a person's tasks across ALL visible workspaces in one call, by email or user_id — no team_id, no manual pagination/dedup needed |
 | `clickup_create_task` | Create a task |
 | `clickup_update_task` | Update a task |
 | `clickup_delete_task` | Delete a task |
@@ -101,6 +102,57 @@ uv run clickup-mcp
 | `clickup_get_doc_page` | Get a single page from a Doc (v3) |
 | `clickup_attach_task_file` | Upload a file (e.g. an image) as an attachment on a task |
 | `clickup_create_comment_with_image` | Upload a file and post it inline inside a new task comment, in one call |
+| `clickup_list_rocks_for_org` | List all EOS Rocks (quarterly goals) org-wide in one call, normalized to a fixed status enum |
+
+### Finding a person's ClickUp user ID (no dedicated tool needed)
+
+`clickup_get_workspaces` passes through ClickUp's native `GET /team` response
+unmodified, which already includes each workspace's member list
+(`teams[].members[].user.{id,username,email}`) — there is no separate
+"list members" tool because none is needed. `clickup_list_tasks_for_person`
+uses this internally to resolve `email` -> `user_id`; call
+`clickup_get_workspaces` directly if you just need the member list itself
+(e.g. to map a person to their ID for some other purpose).
+
+### `clickup_search_tasks` already returns `status.type`
+
+Like every other read tool here, `clickup_search_tasks` and
+`clickup_get_task` pass through ClickUp's raw task object unmodified —
+including the `status` object's `type` field (`open` / `custom` / `closed` /
+`done`), which is the only reliable way to tell whether a custom-named
+status counts as done. No code change was needed for this; it was already
+there. `clickup_list_tasks_for_person` surfaces it explicitly as
+`status_type` on each returned task for convenience.
+
+### How EOS Rocks are represented in this ClickUp workspace
+
+Confirmed 2026-08-18 by inspecting a real rock task's fields directly (not
+guessed): **Rocks are regular ClickUp tasks living in a list literally named
+"Rocks"** (found under Space "Company" > Folder "EOS Traction"), each
+carrying dedicated custom fields: `Quarter` (dropdown, "Q1 2024".."Q4 2026"),
+`Rocks Status` (On Hold / Off Track / On Track / Completed / Blocked / At
+Risk), `Rock Type` (Company / Individual / Departmental / Team Rock),
+`Department`, and progress via either `Progress` (manual) or `Progress %`
+(auto, checklist-rollup). This is neither the ClickUp Goals API nor a
+plain task list with no metadata — it's tasks-plus-custom-fields.
+
+`clickup_list_rocks_for_org` discovers every list named "Rocks" (by name,
+not a hardcoded ID, in case spaces/folders get reorganized) across every
+workspace visible to the token, reads these fields, and normalizes them:
+
+- `quarter`: ClickUp's "Q3 2026" label is converted to `2026-Q3` (and back,
+  for the `quarter` input filter).
+- `status`: ClickUp's 6 raw options are mapped down to the 5-value contract
+  (`on_track`/`off_track`/`done`/`missed`/`open`) — see the `_STATUS_MAP`
+  comment in `rocks.py` for the exact mapping and why `missed` is never
+  emitted (nothing in ClickUp's data distinguishes "ran out of time" from
+  generic "off track"; deriving it from an overdue due_date would be an
+  unconfirmed business-logic assumption, so it isn't done here).
+- **`measurable`**: no dedicated field exists on this list. Falls back to
+  the task description; `null` if that's empty too (never fabricated).
+- **`weekly_status`**: no structured source was found anywhere (not a
+  custom field, nothing comment-derived either) — always returned as `[]`.
+  If the org starts tracking this in ClickUp some other way, revisit.
 
 ### Attachments and images
 
