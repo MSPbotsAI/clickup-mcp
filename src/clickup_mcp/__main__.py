@@ -5,17 +5,20 @@ from .server import GatewayTokenMiddleware, create_mcp_server
 
 
 def _build_http_app(mcp, settings):
-    """Wrap the FastMCP Starlette app with a /health route and optional gateway middleware."""
+    """Wrap the FastMCP Starlette app with a /health route and the gateway
+    credential middleware. HTTP transport is always gateway mode — there is
+    no header-optional variant, so the middleware is unconditional here.
+    """
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
     async def health(_: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "transport": "http", "auth_mode": settings.auth_mode})
+        return JSONResponse({"status": "ok"})
 
     mcp_app = mcp.streamable_http_app()   # Starlette app owning the session-manager lifespan
-    mounted = GatewayTokenMiddleware(mcp_app, settings) if settings.auth_mode == "gateway" else mcp_app
+    mounted = GatewayTokenMiddleware(mcp_app, settings)
 
     # Mount() does NOT run a sub-app's lifespan, so the streamable-http session
     # manager's task group would never start ("Task group is not initialized").
@@ -40,10 +43,9 @@ def main() -> None:
             f"http://{settings.mcp_http_host}:{settings.mcp_http_port}/mcp",
             file=sys.stderr,
         )
-        print(f"Auth mode: {settings.auth_mode}", file=sys.stderr)
         uvicorn.run(app, host=settings.mcp_http_host, port=settings.mcp_http_port)
     else:
-        print("ClickUp MCP server running on stdio", file=sys.stderr)
+        print("ClickUp MCP server running on stdio (local dev mode)", file=sys.stderr)
         mcp.run(transport="stdio")
 
 

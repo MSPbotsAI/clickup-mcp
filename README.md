@@ -11,7 +11,12 @@ ClickUp MCP server for Claude — exposes ClickUp tasks, spaces, folders, lists,
 cd D:\leo\mcp-server\clickup-mcp
 uv sync
 
-# Run in stdio mode (for Claude Desktop)
+# Run in HTTP/gateway mode (the default) — each request supplies its own
+# token via the X-Clickup-Token header, nothing to set locally
+uv run clickup-mcp
+
+# Or run in stdio mode for local single-user tools like Claude Desktop
+$env:MCP_TRANSPORT="stdio"
 $env:CLICKUP_API_TOKEN="pk_xxxxx"
 uv run clickup-mcp
 ```
@@ -22,11 +27,16 @@ Copy `.env.example` to `.env` and fill in your values:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLICKUP_API_TOKEN` | — | ClickUp personal API token (`pk_xxxxx`) |
-| `AUTH_MODE` | `env` | `env` = token from env var; `gateway` = token per-request from `X-Clickup-Token` header |
-| `MCP_TRANSPORT` | `stdio` | `stdio` (Claude Desktop) or `http` (gateway) |
+| `MCP_TRANSPORT` | `http` | `http` (gateway, default) or `stdio` (Claude Desktop / local dev only) |
+| `CLICKUP_API_TOKEN` | — | ClickUp personal API token (`pk_xxxxx`). Only read when `MCP_TRANSPORT=stdio` — the HTTP/gateway path never reads it, by design (no header = 401, never a silent fallback to this value) |
 | `MCP_HTTP_PORT` | `8080` | HTTP server port |
 | `CLICKUP_BASE_URL` | `https://api.clickup.com/api/v2` | API base URL |
+
+Note: there is no `AUTH_MODE` setting anymore. HTTP transport is always
+gateway mode (per-request `X-Clickup-Token` header, enforced by middleware);
+stdio transport is always local-token mode. Credential source now follows
+transport directly, so there is no way to accidentally run an HTTP/gateway
+deployment that falls back to a shared env-var token.
 
 Get your API token: ClickUp → Settings → Apps → API Token
 
@@ -50,26 +60,18 @@ Add to `claude_desktop_config.json`:
 
 ## Transport Modes
 
-### stdio (Claude Desktop / CLI)
+### HTTP — gateway / multi-tenant (default)
 ```powershell
-$env:CLICKUP_API_TOKEN="pk_xxxxx"
-uv run clickup-mcp
-```
-
-### HTTP — single-tenant
-```powershell
-$env:CLICKUP_API_TOKEN="pk_xxxxx"
-$env:MCP_TRANSPORT="http"
-$env:MCP_HTTP_PORT="8080"
-uv run clickup-mcp
-```
-
-### HTTP — gateway / multi-tenant
-```powershell
-$env:MCP_TRANSPORT="http"
-$env:AUTH_MODE="gateway"
 uv run clickup-mcp
 # Each request must include: X-Clickup-Token: pk_xxxxx
+# A request with no header gets 401 — there is no env-var fallback.
+```
+
+### stdio (Claude Desktop / CLI, local dev only)
+```powershell
+$env:MCP_TRANSPORT="stdio"
+$env:CLICKUP_API_TOKEN="pk_xxxxx"
+uv run clickup-mcp
 ```
 
 ## Available Tools (28)

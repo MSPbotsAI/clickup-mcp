@@ -1,37 +1,49 @@
-import json
 from collections.abc import Callable
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
-
-_NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AUTH_MODE=gateway."
+from ._common import NO_TOKEN
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_get_task(
-        task_id: str,
-        custom_task_ids: bool = False,
-        team_id: str | None = None,
-        include_subtasks: bool | None = None,
-        include_markdown_description: bool | None = None,
+        task_id: Annotated[
+            str, Field(description="The task ID, or the custom ID when custom_task_ids is True.")
+        ],
+        custom_task_ids: Annotated[
+            bool,
+            Field(
+                description=(
+                    'Set True to look up the task by its custom ID (e.g. "ABC-123"). '
+                    "Requires team_id."
+                )
+            ),
+        ] = False,
+        team_id: Annotated[
+            str | None,
+            Field(description="The workspace/team ID. Required when custom_task_ids is True."),
+        ] = None,
+        include_subtasks: Annotated[
+            bool | None, Field(description="Include subtasks in the response.")
+        ] = None,
+        include_markdown_description: Annotated[
+            bool | None, Field(description="Return the task description in Markdown.")
+        ] = None,
     ) -> str:
-        """Get a ClickUp task by ID or by custom ID.
-
-        Args:
-            task_id: The task ID, or the custom ID when custom_task_ids is True.
-            custom_task_ids: Set True to look up the task by its custom ID
-                (e.g. "ABC-123"). Requires team_id.
-            team_id: The workspace/team ID. Required when custom_task_ids is True.
-            include_subtasks: Include subtasks in the response.
-            include_markdown_description: Return the task description in Markdown.
-        """
+        """Get a ClickUp task by ID or by custom ID."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         if custom_task_ids and not team_id:
-            return "Error: team_id is required when custom_task_ids is True."
+            return error_envelope(
+                "invalid_argument", "team_id is required when custom_task_ids is True", False
+            )
         params: dict = {}
         if custom_task_ids:
             params["custom_task_ids"] = "true"
@@ -42,56 +54,53 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             params["include_markdown_description"] = include_markdown_description
         try:
             result = await client.get(f"/task/{task_id}", params)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_search_tasks(
-        team_id: str,
-        page: int = 0,
-        order_by: str | None = None,
-        reverse: bool | None = None,
-        subtasks: bool | None = None,
-        space_ids: list[str] | None = None,
-        project_ids: list[str] | None = None,
-        list_ids: list[str] | None = None,
-        statuses: list[str] | None = None,
-        include_closed: bool | None = None,
-        assignees: list[str] | None = None,
-        tags: list[str] | None = None,
-        due_date_gt: int | None = None,
-        due_date_lt: int | None = None,
-        date_created_gt: int | None = None,
-        date_created_lt: int | None = None,
-        date_updated_gt: int | None = None,
-        date_updated_lt: int | None = None,
+        team_id: Annotated[str, Field(description="The workspace/team ID to search in.")],
+        page: Annotated[int, Field(description="Page number for pagination.")] = 0,
+        order_by: Annotated[
+            str | None, Field(description="Field to sort by (id, created, updated, due_date).")
+        ] = None,
+        reverse: Annotated[bool | None, Field(description="Reverse sort order.")] = None,
+        subtasks: Annotated[bool | None, Field(description="Include subtasks.")] = None,
+        space_ids: Annotated[list[str] | None, Field(description="Filter by space IDs.")] = None,
+        project_ids: Annotated[
+            list[str] | None, Field(description="Filter by project/folder IDs.")
+        ] = None,
+        list_ids: Annotated[list[str] | None, Field(description="Filter by list IDs.")] = None,
+        statuses: Annotated[list[str] | None, Field(description="Filter by status names.")] = None,
+        include_closed: Annotated[bool | None, Field(description="Include closed tasks.")] = None,
+        assignees: Annotated[
+            list[str] | None, Field(description="Filter by assignee user IDs.")
+        ] = None,
+        tags: Annotated[list[str] | None, Field(description="Filter by tag names.")] = None,
+        due_date_gt: Annotated[
+            int | None, Field(description="Due date greater than (Unix ms timestamp).")
+        ] = None,
+        due_date_lt: Annotated[
+            int | None, Field(description="Due date less than (Unix ms timestamp).")
+        ] = None,
+        date_created_gt: Annotated[
+            int | None, Field(description="Creation date greater than (Unix ms timestamp).")
+        ] = None,
+        date_created_lt: Annotated[
+            int | None, Field(description="Creation date less than (Unix ms timestamp).")
+        ] = None,
+        date_updated_gt: Annotated[
+            int | None, Field(description="Update date greater than (Unix ms timestamp).")
+        ] = None,
+        date_updated_lt: Annotated[
+            int | None, Field(description="Update date less than (Unix ms timestamp).")
+        ] = None,
     ) -> str:
-        """Search tasks in a ClickUp workspace with filters.
-
-        Args:
-            team_id: The workspace/team ID to search in.
-            page: Page number for pagination (default: 0).
-            order_by: Field to sort by (id, created, updated, due_date).
-            reverse: Reverse sort order.
-            subtasks: Include subtasks.
-            space_ids: Filter by space IDs.
-            project_ids: Filter by project/folder IDs.
-            list_ids: Filter by list IDs.
-            statuses: Filter by status names.
-            include_closed: Include closed tasks.
-            assignees: Filter by assignee user IDs.
-            tags: Filter by tag names.
-            due_date_gt: Due date greater than (Unix ms timestamp).
-            due_date_lt: Due date less than (Unix ms timestamp).
-            date_created_gt: Creation date greater than (Unix ms timestamp).
-            date_created_lt: Creation date less than (Unix ms timestamp).
-            date_updated_gt: Update date greater than (Unix ms timestamp).
-            date_updated_lt: Update date less than (Unix ms timestamp).
-        """
+        """Search tasks in a ClickUp workspace with filters."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         params: dict = {"page": page}
         if order_by is not None:
             params["order_by"] = order_by
@@ -127,48 +136,49 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             params["date_updated_lt"] = date_updated_lt
         try:
             result = await client.get(f"/team/{team_id}/task", params)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
     @mcp.tool()
     async def clickup_create_task(
-        list_id: str,
-        name: str,
-        description: str | None = None,
-        assignees: list[int] | None = None,
-        tags: list[str] | None = None,
-        status: str | None = None,
-        priority: int | None = None,
-        due_date: int | None = None,
-        due_date_time: bool | None = None,
-        start_date: int | None = None,
-        start_date_time: bool | None = None,
-        notify_all: bool | None = None,
-        parent: str | None = None,
-        time_estimate: int | None = None,
+        list_id: Annotated[str, Field(description="The list ID where the task will be created.")],
+        name: Annotated[str, Field(description="Task name/title.")],
+        description: Annotated[
+            str | None, Field(description="Task description (markdown supported).")
+        ] = None,
+        assignees: Annotated[list[int] | None, Field(description="List of user IDs to assign.")] = None,
+        tags: Annotated[list[str] | None, Field(description="List of tag names.")] = None,
+        status: Annotated[
+            str | None, Field(description="Task status (must match a status in the list).")
+        ] = None,
+        priority: Annotated[
+            int | None, Field(description="Priority (1=urgent, 2=high, 3=normal, 4=low).")
+        ] = None,
+        due_date: Annotated[
+            int | None, Field(description="Due date as Unix timestamp in milliseconds.")
+        ] = None,
+        due_date_time: Annotated[
+            bool | None, Field(description="True if due date includes time component.")
+        ] = None,
+        start_date: Annotated[
+            int | None, Field(description="Start date as Unix timestamp in milliseconds.")
+        ] = None,
+        start_date_time: Annotated[
+            bool | None, Field(description="True if start date includes time component.")
+        ] = None,
+        notify_all: Annotated[bool | None, Field(description="Notify all assignees.")] = None,
+        parent: Annotated[
+            str | None, Field(description="Parent task ID (to create a subtask).")
+        ] = None,
+        time_estimate: Annotated[
+            int | None, Field(description="Time estimate in milliseconds.")
+        ] = None,
     ) -> str:
-        """Create a new task in a ClickUp list.
-
-        Args:
-            list_id: The list ID where the task will be created.
-            name: Task name/title.
-            description: Task description (markdown supported).
-            assignees: List of user IDs to assign.
-            tags: List of tag names.
-            status: Task status (must match a status in the list).
-            priority: Priority (1=urgent, 2=high, 3=normal, 4=low).
-            due_date: Due date as Unix timestamp in milliseconds.
-            due_date_time: True if due date includes time component.
-            start_date: Start date as Unix timestamp in milliseconds.
-            start_date_time: True if start date includes time component.
-            notify_all: Notify all assignees.
-            parent: Parent task ID (to create a subtask).
-            time_estimate: Time estimate in milliseconds.
-        """
+        """Create a new task in a ClickUp list."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         body: dict = {"name": name}
         if description is not None:
             body["description"] = description
@@ -196,46 +206,53 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["time_estimate"] = time_estimate
         try:
             result = await client.post(f"/list/{list_id}/task", body)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
     async def clickup_update_task(
-        task_id: str,
-        name: str | None = None,
-        description: str | None = None,
-        status: str | None = None,
-        priority: int | None = None,
-        due_date: int | None = None,
-        due_date_time: bool | None = None,
-        start_date: int | None = None,
-        start_date_time: bool | None = None,
-        assignees_add: list[int] | None = None,
-        assignees_rem: list[int] | None = None,
-        archived: bool | None = None,
-        time_estimate: int | None = None,
+        task_id: Annotated[str, Field(description="The task ID to update.")],
+        name: Annotated[str | None, Field(description="New task name.")] = None,
+        description: Annotated[
+            str | None, Field(description="New description (markdown supported).")
+        ] = None,
+        status: Annotated[
+            str | None, Field(description="New status (must match a status in the list).")
+        ] = None,
+        priority: Annotated[
+            int | None,
+            Field(description="New priority (1=urgent, 2=high, 3=normal, 4=low, null=none)."),
+        ] = None,
+        due_date: Annotated[
+            int | None, Field(description="New due date as Unix timestamp in milliseconds.")
+        ] = None,
+        due_date_time: Annotated[
+            bool | None, Field(description="True if due date includes time component.")
+        ] = None,
+        start_date: Annotated[
+            int | None, Field(description="New start date as Unix timestamp in milliseconds.")
+        ] = None,
+        start_date_time: Annotated[
+            bool | None, Field(description="True if start date includes time component.")
+        ] = None,
+        assignees_add: Annotated[
+            list[int] | None, Field(description="List of user IDs to add as assignees.")
+        ] = None,
+        assignees_rem: Annotated[
+            list[int] | None, Field(description="List of user IDs to remove from assignees.")
+        ] = None,
+        archived: Annotated[
+            bool | None, Field(description="Archive (True) or unarchive (False) the task.")
+        ] = None,
+        time_estimate: Annotated[
+            int | None, Field(description="New time estimate in milliseconds.")
+        ] = None,
     ) -> str:
-        """Update an existing ClickUp task.
-
-        Args:
-            task_id: The task ID to update.
-            name: New task name.
-            description: New description (markdown supported).
-            status: New status (must match a status in the list).
-            priority: New priority (1=urgent, 2=high, 3=normal, 4=low, null=none).
-            due_date: New due date as Unix timestamp in milliseconds.
-            due_date_time: True if due date includes time component.
-            start_date: New start date as Unix timestamp in milliseconds.
-            start_date_time: True if start date includes time component.
-            assignees_add: List of user IDs to add as assignees.
-            assignees_rem: List of user IDs to remove from assignees.
-            archived: Archive (True) or unarchive (False) the task.
-            time_estimate: New time estimate in milliseconds.
-        """
+        """Update an existing ClickUp task."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         body: dict = {}
         if name is not None:
             body["name"] = name
@@ -264,39 +281,45 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["time_estimate"] = time_estimate
         try:
             result = await client.put(f"/task/{task_id}", body)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
-    async def clickup_delete_task(task_id: str) -> str:
+    @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
+    async def clickup_delete_task(
+        task_id: Annotated[str, Field(description="The task ID to delete.")],
+        confirm: Annotated[
+            bool, Field(description="Required — must be set to true to proceed.")
+        ] = False,
+    ) -> str:
         """Delete a ClickUp task.
 
-        Args:
-            task_id: The task ID to delete.
+        Destructive. Requires confirm=true.
         """
+        if not confirm:
+            return error_envelope(
+                "invalid_argument", "destructive operation requires confirm=true", False
+            )
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             await client.delete(f"/task/{task_id}")
-            return f"Task {task_id} deleted successfully."
+            return dump_json_capped({"deleted": True, "task_id": task_id})
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
-    async def clickup_move_task(task_id: str, list_id: str) -> str:
-        """Move a ClickUp task to a different list.
-
-        Args:
-            task_id: The task ID to move.
-            list_id: The destination list ID.
-        """
+    @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
+    async def clickup_move_task(
+        task_id: Annotated[str, Field(description="The task ID to move.")],
+        list_id: Annotated[str, Field(description="The destination list ID.")],
+    ) -> str:
+        """Move a ClickUp task to a different list."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.put(f"/task/{task_id}", {"list": {"id": list_id}})
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()

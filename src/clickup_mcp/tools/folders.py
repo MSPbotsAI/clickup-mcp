@@ -1,93 +1,95 @@
-import json
 from collections.abc import Callable
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
-
-_NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AUTH_MODE=gateway."
+from ._common import NO_TOKEN
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
-    @mcp.tool()
-    async def clickup_get_folder(folder_id: str) -> str:
-        """Get details of a ClickUp folder.
-
-        Args:
-            folder_id: The folder ID.
-        """
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    async def clickup_get_folder(
+        folder_id: Annotated[str, Field(description="The folder ID.")],
+    ) -> str:
+        """Get details of a ClickUp folder."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.get(f"/folder/{folder_id}")
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
-    async def clickup_get_folder_lists(folder_id: str, archived: bool = False) -> str:
-        """List all lists in a ClickUp folder.
-
-        Args:
-            folder_id: The folder ID.
-            archived: Include archived lists (default: False).
-        """
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    async def clickup_get_folder_lists(
+        folder_id: Annotated[str, Field(description="The folder ID.")],
+        archived: Annotated[bool, Field(description="Include archived lists.")] = False,
+    ) -> str:
+        """List all lists in a ClickUp folder."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.get(f"/folder/{folder_id}/list", {"archived": archived})
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
     @mcp.tool()
-    async def clickup_create_folder(space_id: str, name: str) -> str:
-        """Create a new folder in a ClickUp space.
-
-        Args:
-            space_id: The space ID where the folder will be created.
-            name: Name for the new folder.
-        """
+    async def clickup_create_folder(
+        space_id: Annotated[str, Field(description="The space ID where the folder will be created.")],
+        name: Annotated[str, Field(description="Name for the new folder.")],
+    ) -> str:
+        """Create a new folder in a ClickUp space."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.post(f"/space/{space_id}/folder", {"name": name})
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
-    async def clickup_update_folder(folder_id: str, name: str) -> str:
-        """Update a ClickUp folder.
-
-        Args:
-            folder_id: The folder ID to update.
-            name: New name for the folder.
-        """
+    @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
+    async def clickup_update_folder(
+        folder_id: Annotated[str, Field(description="The folder ID to update.")],
+        name: Annotated[str, Field(description="New name for the folder.")],
+    ) -> str:
+        """Update a ClickUp folder."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.put(f"/folder/{folder_id}", {"name": name})
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
-    async def clickup_delete_folder(folder_id: str) -> str:
+    @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
+    async def clickup_delete_folder(
+        folder_id: Annotated[str, Field(description="The folder ID to delete.")],
+        confirm: Annotated[
+            bool, Field(description="Required — must be set to true to proceed.")
+        ] = False,
+    ) -> str:
         """Delete a ClickUp folder.
 
-        Args:
-            folder_id: The folder ID to delete.
+        Destructive. Requires confirm=true.
         """
+        if not confirm:
+            return error_envelope(
+                "invalid_argument", "destructive operation requires confirm=true", False
+            )
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             await client.delete(f"/folder/{folder_id}")
-            return f"Folder {folder_id} deleted successfully."
+            return dump_json_capped({"deleted": True, "folder_id": folder_id})
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()

@@ -1,37 +1,34 @@
-import json
 from collections.abc import Callable
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from .._json import dump_json_capped
 from ..api_client import ClickUpClient, ClickUpError
-
-_NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AUTH_MODE=gateway."
+from ._common import NO_TOKEN
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_get_doc_page(
-        workspace_id: str,
-        doc_id: str,
-        page_id: str,
-        content_format: str = "text/md",
+        workspace_id: Annotated[str, Field(description="The Workspace (team) ID.")],
+        doc_id: Annotated[str, Field(description="The Doc ID.")],
+        page_id: Annotated[str, Field(description="The Page ID.")],
+        content_format: Annotated[
+            str, Field(description='Page content format: "text/md" (default) or "text/plain".')
+        ] = "text/md",
     ) -> str:
-        """Get a single page from a ClickUp Doc.
-
-        Args:
-            workspace_id: The Workspace (team) ID.
-            doc_id: The Doc ID.
-            page_id: The Page ID.
-            content_format: Page content format: "text/md" (default) or "text/plain".
-        """
+        """Get a single page from a ClickUp Doc."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.get_v3(
                 f"/workspaces/{workspace_id}/docs/{doc_id}/pages/{page_id}",
                 {"content_format": content_format},
             )
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()

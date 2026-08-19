@@ -1,12 +1,14 @@
-import json
 from collections.abc import Callable
 from datetime import datetime, timezone
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
-
-_NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AUTH_MODE=gateway."
+from ._common import NO_TOKEN
 
 # Same pagination convention as clickup_search_tasks / clickup_list_tasks_for_person:
 # ClickUp's list-scoped "Get Tasks" endpoint (GET /list/:list_id/task) returns up
@@ -197,61 +199,54 @@ async def _find_rocks_lists(client: ClickUpClient) -> list[dict]:
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_list_rocks_for_org(
-        quarter: str | None = None,
-        include_completed: bool = True,
+        quarter: Annotated[
+            str | None,
+            Field(
+                description=(
+                    'Target quarter as "YYYY-Qn", e.g. "2026-Q3". Defaults to the '
+                    "current UTC quarter if omitted."
+                )
+            ),
+        ] = None,
+        include_completed: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Include rocks already marked Completed. Default True — quarterly "
+                    "reviews usually want to see what finished, not just what's outstanding."
+                )
+            ),
+        ] = True,
     ) -> str:
-        """List all EOS Rocks (quarterly goals) across the organization in one
-        call — no person/owner argument, this is org-wide by design so a
-        quarterly review needs one call instead of one per person.
+        """List all EOS Rocks (quarterly goals) org-wide, one call.
 
-        Rocks in this ClickUp workspace are regular tasks living in a list
-        literally named "Rocks" (discovered dynamically by name, not a
-        hardcoded ID), with dedicated custom fields: Quarter, Rocks Status,
-        Rock Type, Department, and Progress (manual and/or auto). This tool
-        reads those fields and normalizes them into a fixed shape — see
-        module-level notes on two known gaps: there is no dedicated
-        "measurable" field (falls back to the task description, or null if
-        that's empty too), and no structured weekly on/off tracking field
-        exists anywhere in the source data (always returned as an empty
-        list).
+        Rocks are regular ClickUp tasks in a list named "Rocks" (discovered dynamically —
+        see module comments for field mapping and gaps: no "measurable" field, no weekly tracking).
 
-        Args:
-            quarter: Target quarter as "YYYY-Qn", e.g. "2026-Q3". Defaults to
-                the current UTC quarter if omitted.
-            include_completed: Include rocks already marked Completed.
-                Default True — quarterly reviews usually want to see what
-                finished, not just what's outstanding.
-
-        Returns JSON: { rocks: [...], truncated: bool }. Each rock has
-        id/title/measurable/quarter/owner_email/owner_user_id/owner_name/
-        progress_percent/status/rock_type/department/due_date/url/
-        weekly_status. `status` is always one of on_track/off_track/done/
-        missed/open (ClickUp's 6 raw status options are mapped down to
-        these 5 — see module comment for the exact mapping and its
-        rationale). `truncated: true` means a list's task count hit the
-        internal page-count safety cap — a defensive fallback, not expected
-        in normal use for a curated Rocks list.
+        Returns JSON: { rocks: [...], truncated: bool }; each rock has id/title/measurable/quarter/
+        owner_email/owner_user_id/owner_name/progress_percent/status/rock_type/department/due_date/url/weekly_status.
         """
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
 
         target_quarter = quarter or _current_iso_quarter()
         target_label = _iso_quarter_to_field_label(target_quarter)
         if target_label is None:
-            return f"Error: could not parse 'quarter' as YYYY-Qn: {quarter}"
+            return error_envelope(
+                "invalid_argument", f"could not parse 'quarter' as YYYY-Qn: {quarter}", False
+            )
 
         rocks_lists = await _find_rocks_lists(client)
         if not rocks_lists:
-            return json.dumps(
+            return dump_json_capped(
                 {
                     "rocks": [],
                     "truncated": False,
                     "note": "No list named 'Rocks' found in any workspace visible to this token",
-                },
-                indent=2,
+                }
             )
 
         all_rocks: list[dict] = []
@@ -267,7 +262,7 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                 try:
                     result = await client.get(f"/list/{list_id}/task", params)
                 except ClickUpError as e:
-                    return f"Error: {e}"
+                    return e.to_envelope()
                 page_tasks = (result or {}).get("tasks", []) or []
                 if not page_tasks:
                     break
@@ -281,4 +276,4 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             else:
                 truncated = True
 
-        return json.dumps({"rocks": all_rocks, "truncated": truncated}, indent=2, ensure_ascii=False)
+        return dump_json_capped({"rocks": all_rocks, "truncated": truncated})

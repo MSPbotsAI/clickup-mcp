@@ -1,54 +1,48 @@
-import json
 from collections.abc import Callable
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
+from .._json import dump_json_capped
 from ..api_client import ClickUpClient, ClickUpError
-
-_NO_TOKEN = "Error: No ClickUp token configured. Set CLICKUP_API_TOKEN or use AUTH_MODE=gateway."
+from ._common import NO_TOKEN
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
-    @mcp.tool()
-    async def clickup_get_list(list_id: str) -> str:
-        """Get details of a ClickUp list.
-
-        Args:
-            list_id: The list ID.
-        """
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    async def clickup_get_list(
+        list_id: Annotated[str, Field(description="The list ID.")],
+    ) -> str:
+        """Get details of a ClickUp list."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         try:
             result = await client.get(f"/list/{list_id}")
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
     @mcp.tool()
     async def clickup_create_list_in_folder(
-        folder_id: str,
-        name: str,
-        content: str | None = None,
-        due_date: int | None = None,
-        priority: int | None = None,
-        assignee: int | None = None,
-        status: str | None = None,
+        folder_id: Annotated[str, Field(description="The folder ID where the list will be created.")],
+        name: Annotated[str, Field(description="Name for the new list.")],
+        content: Annotated[str | None, Field(description="Description/content for the list.")] = None,
+        due_date: Annotated[
+            int | None, Field(description="Due date as Unix timestamp in milliseconds.")
+        ] = None,
+        priority: Annotated[
+            int | None, Field(description="Priority level (1=urgent, 2=high, 3=normal, 4=low).")
+        ] = None,
+        assignee: Annotated[int | None, Field(description="User ID to assign as default assignee.")] = None,
+        status: Annotated[str | None, Field(description="Default status for tasks in this list.")] = None,
     ) -> str:
-        """Create a new list inside a ClickUp folder.
-
-        Args:
-            folder_id: The folder ID where the list will be created.
-            name: Name for the new list.
-            content: Description/content for the list.
-            due_date: Due date as Unix timestamp in milliseconds.
-            priority: Priority level (1=urgent, 2=high, 3=normal, 4=low).
-            assignee: User ID to assign as default assignee.
-            status: Default status for tasks in this list.
-        """
+        """Create a new list inside a ClickUp folder."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         body: dict = {"name": name}
         if content is not None:
             body["content"] = content
@@ -62,34 +56,28 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["status"] = status
         try:
             result = await client.post(f"/folder/{folder_id}/list", body)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
     @mcp.tool()
     async def clickup_create_folderless_list(
-        space_id: str,
-        name: str,
-        content: str | None = None,
-        due_date: int | None = None,
-        priority: int | None = None,
-        assignee: int | None = None,
-        status: str | None = None,
+        space_id: Annotated[str, Field(description="The space ID where the list will be created.")],
+        name: Annotated[str, Field(description="Name for the new list.")],
+        content: Annotated[str | None, Field(description="Description/content for the list.")] = None,
+        due_date: Annotated[
+            int | None, Field(description="Due date as Unix timestamp in milliseconds.")
+        ] = None,
+        priority: Annotated[
+            int | None, Field(description="Priority level (1=urgent, 2=high, 3=normal, 4=low).")
+        ] = None,
+        assignee: Annotated[int | None, Field(description="User ID to assign as default assignee.")] = None,
+        status: Annotated[str | None, Field(description="Default status for tasks in this list.")] = None,
     ) -> str:
-        """Create a new folderless list directly in a ClickUp space.
-
-        Args:
-            space_id: The space ID where the list will be created.
-            name: Name for the new list.
-            content: Description/content for the list.
-            due_date: Due date as Unix timestamp in milliseconds.
-            priority: Priority level (1=urgent, 2=high, 3=normal, 4=low).
-            assignee: User ID to assign as default assignee.
-            status: Default status for tasks in this list.
-        """
+        """Create a new folderless list directly in a ClickUp space."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         body: dict = {"name": name}
         if content is not None:
             body["content"] = content
@@ -103,34 +91,32 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["status"] = status
         try:
             result = await client.post(f"/space/{space_id}/list", body)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
     async def clickup_update_list(
-        list_id: str,
-        name: str | None = None,
-        content: str | None = None,
-        due_date: int | None = None,
-        priority: int | None = None,
-        assignee: str | None = None,
-        unset_status: bool | None = None,
+        list_id: Annotated[str, Field(description="The list ID to update.")],
+        name: Annotated[str | None, Field(description="New name for the list.")] = None,
+        content: Annotated[str | None, Field(description="New description/content.")] = None,
+        due_date: Annotated[
+            int | None, Field(description="New due date as Unix timestamp in milliseconds.")
+        ] = None,
+        priority: Annotated[
+            int | None, Field(description="Priority level (1=urgent, 2=high, 3=normal, 4=low).")
+        ] = None,
+        assignee: Annotated[
+            str | None, Field(description="'none' to unassign, or user ID to set assignee.")
+        ] = None,
+        unset_status: Annotated[
+            bool | None, Field(description="Set True to unset the default status.")
+        ] = None,
     ) -> str:
-        """Update a ClickUp list.
-
-        Args:
-            list_id: The list ID to update.
-            name: New name for the list.
-            content: New description/content.
-            due_date: New due date as Unix timestamp in milliseconds.
-            priority: Priority level (1=urgent, 2=high, 3=normal, 4=low).
-            assignee: 'none' to unassign, or user ID to set assignee.
-            unset_status: Set True to unset the default status.
-        """
+        """Update a ClickUp list."""
         client = client_factory()
         if client is None:
-            return _NO_TOKEN
+            return NO_TOKEN
         body: dict = {}
         if name is not None:
             body["name"] = name
@@ -146,6 +132,6 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["unset_status"] = unset_status
         try:
             result = await client.put(f"/list/{list_id}", body)
-            return json.dumps(result, indent=2)
+            return dump_json_capped(result)
         except ClickUpError as e:
-            return f"Error: {e}"
+            return e.to_envelope()
