@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import time
 from typing import Any
 
 import httpx
@@ -176,10 +177,24 @@ class ClickUpClient:
         raise ClickUpError(0, "request failed with no response")
 
     def _retry_delay(self, resp: httpx.Response, attempt: int) -> float:
+        # A generic Retry-After takes priority if present, but ClickUp's own
+        # docs (developer.clickup.com/docs/rate-limits) only document
+        # X-RateLimit-Reset on 429s — a Unix timestamp for when the
+        # per-minute window resets, not a Retry-After header. Without this,
+        # every 429 fell through to blind exponential backoff and ignored
+        # the exact wait ClickUp already told us.
         retry_after = resp.headers.get("Retry-After")
         if retry_after:
             try:
                 return min(float(retry_after), _MAX_BACKOFF_SECONDS)
+            except ValueError:
+                pass
+        reset_at = resp.headers.get("X-RateLimit-Reset")
+        if reset_at:
+            try:
+                delay = float(reset_at) - time.time()
+                if delay > 0:
+                    return min(delay, _MAX_BACKOFF_SECONDS)
             except ValueError:
                 pass
         return min(2**attempt, _MAX_BACKOFF_SECONDS)

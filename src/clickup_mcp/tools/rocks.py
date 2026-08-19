@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Annotated
@@ -146,6 +147,12 @@ def _project_rock(task: dict) -> dict:
         "owner_name": owner.get("username"),
         "progress_percent": _progress_percent(fields_by_name),
         "status": _STATUS_MAP.get((status_label or "").strip().lower(), "open"),
+        # The raw ClickUp status label (e.g. "At Risk"), alongside the
+        # normalized 5-value `status` above. Consumers branch on `status`;
+        # this is purely so a UI can show ClickUp's own wording instead of
+        # ours, so the two don't visibly disagree. Additive, no behaviour
+        # change to the existing `status` field.
+        "status_raw": status_label,
         "rock_type": rock_type,
         "department": department,
         "due_date": _ms_to_iso(task.get("due_date")),
@@ -158,44 +165,74 @@ def _project_rock(task: dict) -> dict:
     }
 
 
+async def _spaces_for_team(client: ClickUpClient, team_id: str) -> list[dict]:
+    try:
+        space_result = await client.get(f"/team/{team_id}/space", {"archived": False})
+    except ClickUpError:
+        return []
+    return (space_result or {}).get("spaces", []) or []
+
+
+async def _rocks_lists_in_space(client: ClickUpClient, space_id: str) -> list[dict]:
+    async def _folderless() -> list[dict]:
+        try:
+            r = await client.get(f"/space/{space_id}/list", {"archived": False})
+        except ClickUpError:
+            return []
+        return (r or {}).get("lists", []) or []
+
+    async def _folders() -> list[dict]:
+        try:
+            r = await client.get(f"/space/{space_id}/folder", {"archived": False})
+        except ClickUpError:
+            return []
+        return (r or {}).get("folders", []) or []
+
+    folderless_lists, folders = await asyncio.gather(_folderless(), _folders())
+
+    found: list[dict] = [
+        lst for lst in folderless_lists if (lst.get("name") or "").strip().lower() == _ROCKS_LIST_NAME
+    ]
+    for folder in folders:
+        found.extend(
+            lst
+            for lst in folder.get("lists", []) or []
+            if (lst.get("name") or "").strip().lower() == _ROCKS_LIST_NAME
+        )
+    return found
+
+
 async def _find_rocks_lists(client: ClickUpClient) -> list[dict]:
     """Discover every list literally named "Rocks" (case-insensitive) across
-    every workspace/space this token can see, folder or folderless."""
+    every workspace/space this token can see, folder or folderless.
+
+    Every space's lookup runs concurrently (asyncio.gather), not one after
+    another — a sequential version of this walk was measured to time out
+    against MSPbots' own workspace (15+ spaces x 2 calls each, run one at a
+    time, comfortably exceeded the caller's MCP timeout). ClickUp's rate
+    limit is a per-minute budget with no separate burst cap (100/min on the
+    lowest plan tier), and this fires on the order of 2 x (space count)
+    requests once, so a few dozen concurrent calls stays well inside it.
+    """
     try:
         team_result = await client.get("/team")
     except ClickUpError:
         return []
     teams = (team_result or {}).get("teams", []) or []
+    team_ids = [team.get("id") for team in teams if team.get("id")]
 
-    found: list[dict] = []
-    for team in teams:
-        team_id = team.get("id")
-        if not team_id:
-            continue
-        try:
-            space_result = await client.get(f"/team/{team_id}/space", {"archived": False})
-        except ClickUpError:
-            continue
-        for space in (space_result or {}).get("spaces", []) or []:
-            space_id = space.get("id")
-            if not space_id:
-                continue
-            try:
-                folderless = await client.get(f"/space/{space_id}/list", {"archived": False})
-                for lst in (folderless or {}).get("lists", []) or []:
-                    if (lst.get("name") or "").strip().lower() == _ROCKS_LIST_NAME:
-                        found.append(lst)
-            except ClickUpError:
-                pass
-            try:
-                folder_result = await client.get(f"/space/{space_id}/folder", {"archived": False})
-            except ClickUpError:
-                continue
-            for folder in (folder_result or {}).get("folders", []) or []:
-                for lst in folder.get("lists", []) or []:
-                    if (lst.get("name") or "").strip().lower() == _ROCKS_LIST_NAME:
-                        found.append(lst)
-    return found
+    space_lists = await asyncio.gather(*(_spaces_for_team(client, tid) for tid in team_ids))
+    space_ids = [
+        space.get("id")
+        for spaces in space_lists
+        for space in spaces
+        if space.get("id")
+    ]
+
+    per_space_results = await asyncio.gather(
+        *(_rocks_lists_in_space(client, sid) for sid in space_ids)
+    )
+    return [lst for lists in per_space_results for lst in lists]
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
@@ -219,14 +256,42 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                 )
             ),
         ] = True,
+        owner_email: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional — restrict results to rocks owned by this person's email "
+                    "(matched case-insensitively against the rock's first assignee). "
+                    "Omit for the default org-wide behavior (every rock, from every "
+                    "owner). Filtering happens after the org-wide fetch, so this saves "
+                    "response size for a single-person view but not upstream API calls."
+                )
+            ),
+        ] = None,
+        owner_user_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional — restrict results to rocks owned by this ClickUp user_id "
+                    "(see clickup_list_members). Alternative to owner_email; if both are "
+                    "given, a rock must match either one."
+                )
+            ),
+        ] = None,
     ) -> str:
-        """List all EOS Rocks (quarterly goals) org-wide, one call.
+        """List EOS Rocks (quarterly goals), org-wide by default, one call.
 
         Rocks are regular ClickUp tasks in a list named "Rocks" (discovered dynamically —
         see module comments for field mapping and gaps: no "measurable" field, no weekly tracking).
 
+        Pass owner_email or owner_user_id to scope to one person's rocks instead of
+        every rock in the org — useful for a per-person view, where fetching and
+        discarding the whole org's rocks on every call doesn't scale with headcount.
+
         Returns JSON: { rocks: [...], truncated: bool }; each rock has id/title/measurable/quarter/
-        owner_email/owner_user_id/owner_name/progress_percent/status/rock_type/department/due_date/url/weekly_status.
+        owner_email/owner_user_id/owner_name/progress_percent/status/status_raw/rock_type/department/
+        due_date/url/weekly_status. `status_raw` is ClickUp's own status label, alongside the
+        normalized `status` enum, so a UI can show ClickUp's wording without it looking out of sync.
         """
         client = client_factory()
         if client is None:
@@ -238,6 +303,9 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             return error_envelope(
                 "invalid_argument", f"could not parse 'quarter' as YYYY-Qn: {quarter}", False
             )
+
+        owner_email_norm = owner_email.strip().lower() if owner_email else None
+        owner_user_id_norm = str(owner_user_id).strip() if owner_user_id else None
 
         rocks_lists = await _find_rocks_lists(client)
         if not rocks_lists:
@@ -268,8 +336,20 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                     break
                 for t in page_tasks:
                     rock = _project_rock(t)
-                    if rock["quarter"] == target_quarter:
-                        all_rocks.append(rock)
+                    if rock["quarter"] != target_quarter:
+                        continue
+                    if owner_email_norm or owner_user_id_norm:
+                        email_match = (
+                            owner_email_norm is not None
+                            and (rock["owner_email"] or "").strip().lower() == owner_email_norm
+                        )
+                        id_match = (
+                            owner_user_id_norm is not None
+                            and rock["owner_user_id"] == owner_user_id_norm
+                        )
+                        if not (email_match or id_match):
+                            continue
+                    all_rocks.append(rock)
                 if len(page_tasks) < _CLICKUP_PAGE_SIZE:
                     break
                 page += 1

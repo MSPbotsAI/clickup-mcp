@@ -157,12 +157,49 @@ workspace visible to the token, reads these fields, and normalizes them:
   comment in `rocks.py` for the exact mapping and why `missed` is never
   emitted (nothing in ClickUp's data distinguishes "ran out of time" from
   generic "off track"; deriving it from an overdue due_date would be an
-  unconfirmed business-logic assumption, so it isn't done here).
+  unconfirmed business-logic assumption, so it isn't done here). The raw
+  ClickUp label (e.g. `"At Risk"`) is also returned as `status_raw`,
+  alongside the normalized `status`, so a UI can show ClickUp's own wording
+  without it looking out of sync with the mapped value.
 - **`measurable`**: no dedicated field exists on this list. Falls back to
   the task description; `null` if that's empty too (never fabricated).
 - **`weekly_status`**: no structured source was found anywhere (not a
   custom field, nothing comment-derived either) — always returned as `[]`.
   If the org starts tracking this in ClickUp some other way, revisit.
+- **`owner_email` / `owner_user_id` (optional filter args)**: this tool is
+  org-wide by default (every rock returned), but a caller building a
+  single-person view can pass either to scope the results to one owner's
+  rocks — the org-wide fetch itself still happens (this doesn't reduce
+  upstream ClickUp API calls), it just narrows what's returned. Omit both
+  for the original org-wide behavior.
+
+### Discovery performance: parallel, not sequential
+
+`clickup_list_rocks_for_org`'s list-discovery walk (every workspace, every
+space, each space's folderless lists + folder lists) runs concurrently via
+`asyncio.gather`, not one request after another. A sequential version of
+this was measured to time out against MSPbots' own workspace (15+ spaces
+x 2 calls each, run one at a time, comfortably exceeded the caller's MCP
+timeout) — parallelizing brought it down to ~7s. ClickUp's rate limit
+(developer.clickup.com/docs/rate-limits) is a per-minute budget with no
+separate burst cap (100/min on the lowest plan tier), and this fires on
+the order of 2 x (space count) requests once, so a few dozen concurrent
+calls stays well inside it even combined with other concurrent usage of
+the same token — `api_client.py`'s shared retry logic (see below) also
+backs off on a real 429 rather than assuming this burst is the only
+traffic on the token.
+
+### Rate-limit retries are centralized, not per-tool
+
+Every tool's HTTP calls go through `ClickUpClient`'s shared `_request`
+method (`api_client.py`), which retries `429`/`500`/`502`/`503`/`504`
+with backoff — added here once so every tool benefits, since a token's
+rate-limit budget is shared across whatever else is calling the ClickUp
+API with it, not dedicated to any single tool. On a `429`, the delay
+prefers ClickUp's own `X-RateLimit-Reset` header (a Unix timestamp for
+when the per-minute window resets — the header ClickUp's rate-limit docs
+actually document) over a generic `Retry-After` or blind exponential
+backoff, so retries wait exactly as long as ClickUp says to, not a guess.
 
 ### Attachments and images
 
