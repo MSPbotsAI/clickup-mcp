@@ -73,5 +73,11 @@ def _truncate_list(items: list, max_chars: int, wrap_key: str) -> str:
     return _compact({wrap_key: items[:lo], "truncated": True, "original_count": len(items)})
 
 
-def error_envelope(code: str, message: str, retryable: bool) -> str:
-    return _compact({"error": {"code": code, "message": message, "retryable": retryable}})
+def error_envelope(code: str, message: str, retryable: bool, **details: Any) -> str:
+    """Serialize an error. `details` adds machine-readable fields to the envelope,
+    e.g. authorized_workspaces=[...] so a caller can correct a bad ID in one step
+    instead of retrying blind.
+    """
+    error: dict[str, Any] = {"code": code, "message": message, "retryable": retryable}
+    error.update(details)
+    return _compact({"error": error})

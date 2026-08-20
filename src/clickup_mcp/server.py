@@ -114,10 +114,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             "task discussion; docs (clickup_get_doc_page) for ClickUp Docs content; "
             "attachments (clickup_attach_task_file, clickup_create_comment_with_image) "
             "for uploading files and posting inline images; and rocks "
-            "(clickup_list_rocks_for_org) for EOS quarterly-goal reporting. Typical "
-            "flow: clickup_get_workspaces or clickup_list_spaces to orient, "
-            "clickup_search_tasks/clickup_list_tasks_for_person to find work, then "
-            "the task/comment/attachment tools to act on it. clickup_delete_task and "
+            "(clickup_list_rocks_for_org) for EOS quarterly-goal reporting. "
+            "Workspace/team IDs resolve from the API token: omit team_id unless the "
+            "user named a specific workspace. Typical flow: clickup_search_tasks or "
+            "clickup_list_tasks_for_person to find work, then the task/comment/"
+            "attachment tools to act on it. clickup_delete_task and "
             "clickup_delete_folder are destructive and require confirm=true."
         ),
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),

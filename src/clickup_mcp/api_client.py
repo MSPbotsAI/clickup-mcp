@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import time
 from typing import Any
 
@@ -72,6 +73,14 @@ class ClickUpClient:
     def __init__(self, api_token: str, base_url: str = DEFAULT_BASE_URL):
         self._token = api_token
         self._base_url = base_url.rstrip("/")
+        # Cache keys derive from this, never from the token itself — see
+        # tools/_teams.py for the one place tenant data is cached and why.
+        self._fingerprint = hashlib.sha256(api_token.encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def token_fingerprint(self) -> str:
+        """Stable, non-reversible identifier for the credential in use."""
+        return self._fingerprint
 
     def _headers(self) -> dict[str, str]:
         # ClickUp uses bare token in Authorization header (no "Bearer" prefix)

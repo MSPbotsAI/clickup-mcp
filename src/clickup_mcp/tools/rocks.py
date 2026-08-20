@@ -9,13 +9,12 @@ from pydantic import Field
 
 from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
-from ._common import NO_TOKEN
+from ._common import CLICKUP_PAGE_SIZE, NO_TOKEN
 
 # Same pagination convention as clickup_search_tasks / clickup_list_tasks_for_person:
 # ClickUp's list-scoped "Get Tasks" endpoint (GET /list/:list_id/task) returns up
 # to 100 tasks per page with no total-count/last-page field — stop once a page
 # comes back with fewer than 100.
-_CLICKUP_PAGE_SIZE = 100
 _MAX_PAGES_PER_LIST = 20  # paranoid safety net
 
 # EOS Rocks in this ClickUp workspace turned out to live as regular tasks in a
@@ -281,17 +280,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
     ) -> str:
         """List EOS Rocks (quarterly goals), org-wide by default, one call.
 
-        Rocks are regular ClickUp tasks in a list named "Rocks" (discovered dynamically —
-        see module comments for field mapping and gaps: no "measurable" field, no weekly tracking).
+        Rocks are ClickUp tasks in a list named "Rocks", discovered dynamically.
+        Pass owner_email or owner_user_id to scope to one person.
 
-        Pass owner_email or owner_user_id to scope to one person's rocks instead of
-        every rock in the org — useful for a per-person view, where fetching and
-        discarding the whole org's rocks on every call doesn't scale with headcount.
-
-        Returns JSON: { rocks: [...], truncated: bool }; each rock has id/title/measurable/quarter/
-        owner_email/owner_user_id/owner_name/progress_percent/status/status_raw/rock_type/department/
-        due_date/url/weekly_status. `status_raw` is ClickUp's own status label, alongside the
-        normalized `status` enum, so a UI can show ClickUp's wording without it looking out of sync.
+        Returns JSON: { rocks: [...], truncated: bool }. Each rock carries id,
+        title, measurable, quarter, owner_*, progress_percent, status (with
+        ClickUp's raw label in status_raw), rock_type, department, due_date,
+        url and weekly_status.
         """
         client = client_factory()
         if client is None:
@@ -350,7 +345,7 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                         if not (email_match or id_match):
                             continue
                     all_rocks.append(rock)
-                if len(page_tasks) < _CLICKUP_PAGE_SIZE:
+                if len(page_tasks) < CLICKUP_PAGE_SIZE:
                     break
                 page += 1
             else:

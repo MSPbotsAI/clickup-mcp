@@ -7,6 +7,7 @@ from pydantic import Field
 from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
 from ._common import NO_TOKEN
+from ._teams import ambiguous_write_envelope, annotate, resolve_team_scope
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
@@ -24,16 +25,16 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         ],
         custom_task_ids: Annotated[
             bool,
-            Field(
-                description=(
-                    'Set True to look up the task by its custom ID (e.g. "ABC-123"). '
-                    "Requires team_id."
-                )
-            ),
+            Field(description='Set True to look up the task by its custom ID (e.g. "ABC-123").'),
         ] = False,
         team_id: Annotated[
             str | None,
-            Field(description="The workspace/team ID. Required when custom_task_ids is True."),
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token when that "
+                    "token reaches exactly one workspace."
+                )
+            ),
         ] = None,
     ) -> str:
         """Upload a file (e.g. an image) as an attachment on a ClickUp task.
@@ -44,14 +45,19 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         client = client_factory()
         if client is None:
             return NO_TOKEN
-        if custom_task_ids and not team_id:
-            return error_envelope(
-                "invalid_argument", "team_id is required when custom_task_ids is True", False
-            )
         params: dict = {}
+        scope = None
         if custom_task_ids:
+            # A custom ID is only unique within its workspace. This is a write, so
+            # resolve it but never probe several workspaces looking for a match —
+            # guessing wrong here would attach the file to the wrong task.
+            scope = await resolve_team_scope(client, team_id)
+            if scope.error:
+                return scope.error
+            if len(scope.team_ids) != 1:
+                return ambiguous_write_envelope(scope.teams)
             params["custom_task_ids"] = "true"
-            params["team_id"] = team_id
+            params["team_id"] = scope.team_ids[0]
         try:
             result = await client.post_multipart(
                 f"/task/{task_id}/attachment",
@@ -60,7 +66,7 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                 filename=filename,
                 params=params,
             )
-            return dump_json_capped(result)
+            return dump_json_capped(annotate(result, scope) if scope else result)
         except ClickUpError as e:
             return e.to_envelope()
 

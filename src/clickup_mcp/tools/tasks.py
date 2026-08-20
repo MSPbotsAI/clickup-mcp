@@ -7,7 +7,22 @@ from pydantic import Field
 
 from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
-from ._common import NO_TOKEN
+from ._common import (
+    CLICKUP_PAGE_SIZE,
+    MAX_PAGES_PER_WORKSPACE,
+    MAX_TASKS,
+    NO_TOKEN,
+    fetch_space_names,
+    project_task,
+)
+from ._teams import (
+    annotate,
+    invalidate,
+    is_team_not_authorized,
+    is_workspace_miss,
+    resolve_team_scope,
+    team_error_envelope,
+)
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
@@ -18,16 +33,16 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         ],
         custom_task_ids: Annotated[
             bool,
-            Field(
-                description=(
-                    'Set True to look up the task by its custom ID (e.g. "ABC-123"). '
-                    "Requires team_id."
-                )
-            ),
+            Field(description='Set True to look up the task by its custom ID (e.g. "ABC-123").'),
         ] = False,
         team_id: Annotated[
             str | None,
-            Field(description="The workspace/team ID. Required when custom_task_ids is True."),
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token. Only "
+                    "pass it if the user named a specific workspace."
+                )
+            ),
         ] = None,
         include_subtasks: Annotated[
             bool | None, Field(description="Include subtasks in the response.")
@@ -40,28 +55,67 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         client = client_factory()
         if client is None:
             return NO_TOKEN
-        if custom_task_ids and not team_id:
-            return error_envelope(
-                "invalid_argument", "team_id is required when custom_task_ids is True", False
-            )
         params: dict = {}
-        if custom_task_ids:
-            params["custom_task_ids"] = "true"
-            params["team_id"] = team_id
         if include_subtasks is not None:
             params["include_subtasks"] = include_subtasks
         if include_markdown_description is not None:
             params["include_markdown_description"] = include_markdown_description
-        try:
-            result = await client.get(f"/task/{task_id}", params)
-            return dump_json_capped(result)
-        except ClickUpError as e:
-            return e.to_envelope()
+
+        if not custom_task_ids:
+            # A native ClickUp task ID is globally unique — no workspace context needed.
+            try:
+                return dump_json_capped(await client.get(f"/task/{task_id}", params))
+            except ClickUpError as e:
+                return e.to_envelope()
+
+        # A custom ID is only unique within its own workspace, so ClickUp does
+        # need team_id here. Resolve it instead of asking the caller to guess:
+        # try each workspace the token can see and stop at the first hit.
+        scope = await resolve_team_scope(client, team_id)
+        if scope.error:
+            return scope.error
+        params["custom_task_ids"] = "true"
+        for candidate in scope.team_ids:
+            try:
+                result = await client.get(f"/task/{task_id}", {**params, "team_id": candidate})
+            except ClickUpError as e:
+                if is_workspace_miss(e):
+                    continue
+                if is_team_not_authorized(e):
+                    invalidate(client)  # the cached workspace list was stale
+                    continue
+                return e.to_envelope()
+            if isinstance(result, dict):
+                result["team_id"] = candidate
+            return dump_json_capped(annotate(result, scope))
+        return error_envelope(
+            "not_found",
+            f"no task with custom ID '{task_id}' in any workspace this token can access",
+            False,
+            authorized_workspaces=scope.teams,
+        )
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_search_tasks(
-        team_id: Annotated[str, Field(description="The workspace/team ID to search in.")],
-        page: Annotated[int, Field(description="Page number for pagination.")] = 0,
+        team_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Workspace/team ID to search in. Optional — resolved from the API "
+                    "token, and every accessible workspace is searched when omitted."
+                )
+            ),
+        ] = None,
+        page: Annotated[
+            int,
+            Field(
+                description=(
+                    "Page number for pagination. Applies only when the search targets a "
+                    "single workspace; paging is handled internally otherwise."
+                )
+            ),
+        ] = 0,
+        limit: Annotated[int, Field(description="Max tasks to return (1-200).")] = 50,
         order_by: Annotated[
             str | None, Field(description="Field to sort by (id, created, updated, due_date).")
         ] = None,
@@ -97,11 +151,19 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             int | None, Field(description="Update date less than (Unix ms timestamp).")
         ] = None,
     ) -> str:
-        """Search tasks in a ClickUp workspace with filters."""
+        """Search tasks across ClickUp workspaces with filters.
+
+        Omit team_id to search every workspace this token can access.
+
+        Returns JSON: { tasks: [...], truncated: bool } plus team_id (single
+        workspace) or searched_workspaces (several). Each task is projected to
+        id/custom_id/name/status/status_type/priority/due_date/date_closed/url/
+        list_name/space_name/team_id.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
-        params: dict = {"page": page}
+        params: dict = {}
         if order_by is not None:
             params["order_by"] = order_by
         if reverse is not None:
@@ -134,11 +196,60 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             params["date_updated_gt"] = date_updated_gt
         if date_updated_lt is not None:
             params["date_updated_lt"] = date_updated_lt
-        try:
-            result = await client.get(f"/team/{team_id}/task", params)
-            return dump_json_capped(result)
-        except ClickUpError as e:
-            return e.to_envelope()
+        scope = await resolve_team_scope(client, team_id)
+        if scope.error:
+            return scope.error
+
+        limit = max(1, min(limit, MAX_TASKS))
+
+        if len(scope.team_ids) == 1:
+            target = scope.team_ids[0]
+            try:
+                result = await client.get(f"/team/{target}/task", {**params, "page": page})
+            except ClickUpError as e:
+                return team_error_envelope(e, scope.teams, target)
+            space_names = await fetch_space_names(client, target)
+            found = (result or {}).get("tasks", []) or []
+            payload = {
+                "tasks": [project_task(t, target, space_names) for t in found[:limit]],
+                "truncated": len(found) > limit,
+                "last_page": (result or {}).get("last_page"),
+                "team_id": target,
+            }
+            return dump_json_capped(annotate(payload, scope))
+
+        # Several workspaces and no explicit choice: search all of them and merge,
+        # rather than making the caller pick one blind. A single `page` number has
+        # no meaning across workspaces, so paging is handled internally here.
+        merged: list[dict] = []
+        truncated = False
+        for target in scope.team_ids:
+            if len(merged) >= limit:
+                truncated = True
+                break
+            space_names = await fetch_space_names(client, target)
+            current = 0
+            while current < MAX_PAGES_PER_WORKSPACE:
+                try:
+                    result = await client.get(f"/team/{target}/task", {**params, "page": current})
+                except ClickUpError as e:
+                    return team_error_envelope(e, scope.teams, target)
+                page_tasks = (result or {}).get("tasks", []) or []
+                if not page_tasks:
+                    break
+                for task in page_tasks:
+                    if len(merged) >= limit:
+                        truncated = True
+                        break
+                    merged.append(project_task(task, target, space_names))
+                if truncated or len(page_tasks) < CLICKUP_PAGE_SIZE:
+                    break
+                current += 1
+            else:
+                truncated = True
+        return dump_json_capped(
+            {"tasks": merged, "searched_workspaces": scope.teams, "truncated": truncated}
+        )
 
     @mcp.tool()
     async def clickup_create_task(

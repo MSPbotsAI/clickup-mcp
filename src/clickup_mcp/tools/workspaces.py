@@ -8,6 +8,13 @@ from pydantic import Field
 from .._json import dump_json_capped
 from ..api_client import ClickUpClient, ClickUpError
 from ._common import NO_TOKEN
+from ._teams import (
+    annotate,
+    pick_team_ids,
+    resolve_team_scope,
+    summarize_teams,
+    team_error_envelope,
+)
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
@@ -36,7 +43,12 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
     async def clickup_list_members(
         team_id: Annotated[
             str | None,
-            Field(description="Optional workspace/team ID to filter to. Omit for every workspace."),
+            Field(
+                description=(
+                    "Workspace/team ID to filter to. Optional — resolved from the API "
+                    "token, and every accessible workspace is included when omitted."
+                )
+            ),
         ] = None,
     ) -> str:
         """List ClickUp workspace members, flattened to id/username/email/team_id/role.
@@ -56,11 +68,18 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             result = await client.get("/team")
         except ClickUpError as e:
             return e.to_envelope()
-        teams = (result or {}).get("teams", []) or []
+        raw_teams = (result or {}).get("teams", []) or []
+        # Check the filter against what the token can actually see: a team_id the
+        # token has no access to should return the legal set, not an empty list
+        # that reads as "this workspace has no members".
+        scope = pick_team_ids(summarize_teams(raw_teams), team_id)
+        if scope.error:
+            return scope.error
+        wanted = set(scope.team_ids)
         members: list[dict] = []
-        for team in teams:
+        for team in raw_teams:
             tid = team.get("id")
-            if team_id is not None and str(tid) != str(team_id):
+            if str(tid) not in wanted:
                 continue
             for m in team.get("members", []) or []:
                 user = m.get("user", m)
@@ -74,19 +93,48 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
                         "role": user.get("role_key"),
                     }
                 )
-        return dump_json_capped({"members": members})
+        return dump_json_capped(annotate({"members": members}, scope))
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def clickup_list_spaces(
-        team_id: Annotated[str, Field(description="The workspace/team ID.")],
+        team_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token, and "
+                    "every accessible workspace is listed when omitted."
+                )
+            ),
+        ] = None,
         archived: Annotated[bool, Field(description="Include archived spaces.")] = False,
     ) -> str:
         """List all spaces in a ClickUp workspace."""
         client = client_factory()
         if client is None:
             return NO_TOKEN
-        try:
-            result = await client.get(f"/team/{team_id}/space", {"archived": archived})
-            return dump_json_capped(result)
-        except ClickUpError as e:
-            return e.to_envelope()
+        scope = await resolve_team_scope(client, team_id)
+        if scope.error:
+            return scope.error
+
+        if len(scope.team_ids) == 1:
+            target = scope.team_ids[0]
+            try:
+                result = await client.get(f"/team/{target}/space", {"archived": archived})
+            except ClickUpError as e:
+                return team_error_envelope(e, scope.teams, target)
+            if isinstance(result, dict):
+                result["team_id"] = target
+            return dump_json_capped(annotate(result, scope))
+
+        names = {team["id"]: team.get("name") for team in scope.teams}
+        spaces: list[dict] = []
+        for target in scope.team_ids:
+            try:
+                result = await client.get(f"/team/{target}/space", {"archived": archived})
+            except ClickUpError as e:
+                return team_error_envelope(e, scope.teams, target)
+            for space in (result or {}).get("spaces", []) or []:
+                space["team_id"] = target
+                space["team_name"] = names.get(target)
+                spaces.append(space)
+        return dump_json_capped({"spaces": spaces, "searched_workspaces": scope.teams})

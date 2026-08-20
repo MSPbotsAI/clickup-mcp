@@ -80,7 +80,7 @@ uv run clickup-mcp
 |------|-------------|
 | `clickup_get_workspaces` | List all workspaces/teams |
 | `clickup_list_members` | List workspace members, flattened to id/username/email/team_id/role — resolve a person's email to the user_id `assignees` filters expect |
-| `clickup_list_spaces` | List spaces in a workspace |
+| `clickup_list_spaces` | List spaces in a workspace, or across every workspace the token can see when `team_id` is omitted |
 | `clickup_get_space` | Get space details |
 | `clickup_get_space_folders` | List folders in a space |
 | `clickup_get_space_lists` | List folderless lists in a space |
@@ -93,8 +93,8 @@ uv run clickup-mcp
 | `clickup_create_list_in_folder` | Create list in a folder |
 | `clickup_create_folderless_list` | Create list in a space |
 | `clickup_update_list` | Update a list |
-| `clickup_get_task` | Get task by ID |
-| `clickup_search_tasks` | Search tasks with filters (single workspace, team_id required) |
+| `clickup_get_task` | Get task by native ID, or by custom ID with the workspace resolved automatically |
+| `clickup_search_tasks` | Search tasks with filters; searches every workspace the token can see when `team_id` is omitted |
 | `clickup_list_tasks_for_person` | List a person's tasks across ALL visible workspaces in one call, by email or user_id — no team_id, no manual pagination/dedup needed |
 | `clickup_create_task` | Create a task |
 | `clickup_update_task` | Update a task |
@@ -102,10 +102,27 @@ uv run clickup-mcp
 | `clickup_move_task` | Move task to a different list |
 | `clickup_get_task_comments` | Get task comments |
 | `clickup_create_task_comment` | Add a comment to a task |
-| `clickup_get_doc_page` | Get a single page from a Doc (v3) |
+| `clickup_get_doc_page` | Get a single page from a Doc (v3); `workspace_id` optional |
 | `clickup_attach_task_file` | Upload a file (e.g. an image) as an attachment on a task |
 | `clickup_create_comment_with_image` | Upload a file and post it inline inside a new task comment, in one call |
 | `clickup_list_rocks_for_org` | List all EOS Rocks (quarterly goals) org-wide in one call, normalized to a fixed status enum |
+
+### Workspace (team) IDs are resolved from the token
+
+No tool requires a workspace/team ID. `GET /team` already tells the server every
+workspace the API token is authorized for, so the server resolves it rather than
+asking the caller to supply an ID it has no way of knowing.
+
+- Omit `team_id` and the call covers every workspace the token can reach. Reads
+  fan out and merge; each returned row carries its own `team_id`.
+- Pass a `team_id` the token cannot see and, when only one workspace exists, it
+  is substituted and the response reports `team_id_corrected`.
+- When several workspaces exist and the given ID matches none, the error lists
+  the legal ones in `authorized_workspaces` — so one retry is enough. Writes
+  (`clickup_attach_task_file`) never guess between workspaces.
+
+A workspace the token cannot reach is reported as `invalid_argument`, not
+`unauthorized`; only a genuinely bad token yields `unauthorized`.
 
 ### Finding a person's ClickUp user ID
 

@@ -16,14 +16,14 @@ from clickup_mcp.server import create_mcp_server
 # Every tool this server registers, with its required (non-default) params.
 EXPECTED_REQUIRED: dict[str, set[str]] = {
     "clickup_get_task": {"task_id"},
-    "clickup_search_tasks": {"team_id"},
+    "clickup_search_tasks": set(),
     "clickup_create_task": {"list_id", "name"},
     "clickup_update_task": {"task_id"},
     "clickup_delete_task": {"task_id"},
     "clickup_move_task": {"task_id", "list_id"},
     "clickup_get_task_comments": {"task_id"},
     "clickup_create_task_comment": {"task_id", "comment_text"},
-    "clickup_get_doc_page": {"workspace_id", "doc_id", "page_id"},
+    "clickup_get_doc_page": {"doc_id", "page_id"},
     "clickup_get_folder": {"folder_id"},
     "clickup_get_folder_lists": {"folder_id"},
     "clickup_create_folder": {"space_id", "name"},
@@ -40,7 +40,7 @@ EXPECTED_REQUIRED: dict[str, set[str]] = {
     "clickup_get_space_lists": {"space_id"},
     "clickup_get_workspaces": set(),
     "clickup_list_members": set(),
-    "clickup_list_spaces": {"team_id"},
+    "clickup_list_spaces": set(),
     "clickup_attach_task_file": {"task_id", "file_content_base64", "filename"},
     "clickup_create_comment_with_image": {"task_id", "file_content_base64", "filename"},
 }
