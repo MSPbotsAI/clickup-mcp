@@ -175,17 +175,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
     ) -> str:
         """Search tasks across ClickUp workspaces with filters.
 
-        Omit team_id to search every workspace this token can access.
+        Omit team_id to search every accessible workspace. Prefer
+        clickup_list_tasks_for_person for a plain person lookup; use this
+        for space/list/tag/date-range filters it lacks.
 
-        Returns JSON: { tasks: [...], truncated: bool } plus team_id (single
-        workspace) or searched_workspaces (several). Each task is projected to
-        id/custom_id/name/status/status_type/priority/due_date/date_closed/url/
+        Returns { tasks: [...], truncated: bool } plus team_id or
+        searched_workspaces. Each task: id/name/status/priority/due_date/
         list_name/space_name/team_id.
-
-        Prefer clickup_list_tasks_for_person for a simple "what's on someone's
-        plate" lookup by email/user_id; use this tool when you need
-        workspace-scoped filters (space/list/tag/date range) that tool
-        doesn't expose.
         """
         client = client_factory()
         if client is None:
