@@ -51,7 +51,14 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             bool | None, Field(description="Return the task description in Markdown.")
         ] = None,
     ) -> str:
-        """Get a ClickUp task by ID or by custom ID."""
+        """Get a single ClickUp task by ID (or by custom ID with custom_task_ids=True).
+
+        Returns the raw task object: id, name, description, status
+        {status, type}, priority, assignees[], due_date/start_date (Unix
+        ms), list/folder/space, url, and subtasks[] when
+        include_subtasks=True. description comes back in ClickUp's own
+        format unless include_markdown_description=True.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -117,21 +124,36 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         ] = 0,
         limit: Annotated[int, Field(description="Max tasks to return (1-200).")] = 50,
         order_by: Annotated[
-            str | None, Field(description="Field to sort by (id, created, updated, due_date).")
+            str | None,
+            Field(description="Field to sort by (id, created, updated, due_date); pair with reverse."),
         ] = None,
-        reverse: Annotated[bool | None, Field(description="Reverse sort order.")] = None,
-        subtasks: Annotated[bool | None, Field(description="Include subtasks.")] = None,
-        space_ids: Annotated[list[str] | None, Field(description="Filter by space IDs.")] = None,
+        reverse: Annotated[
+            bool | None, Field(description="Reverse the order_by sort direction (descending).")
+        ] = None,
+        subtasks: Annotated[
+            bool | None, Field(description="Include subtasks among the top-level results.")
+        ] = None,
+        space_ids: Annotated[
+            list[str] | None,
+            Field(description="Filter to these space IDs (OR'd together; ANDed with other filters)."),
+        ] = None,
         project_ids: Annotated[
-            list[str] | None, Field(description="Filter by project/folder IDs.")
+            list[str] | None,
+            Field(description="Filter to these folder IDs (ClickUp calls folders 'projects' here)."),
         ] = None,
-        list_ids: Annotated[list[str] | None, Field(description="Filter by list IDs.")] = None,
-        statuses: Annotated[list[str] | None, Field(description="Filter by status names.")] = None,
-        include_closed: Annotated[bool | None, Field(description="Include closed tasks.")] = None,
+        list_ids: Annotated[
+            list[str] | None, Field(description="Filter to these list IDs.")
+        ] = None,
+        statuses: Annotated[
+            list[str] | None, Field(description="Filter to these status names (e.g. 'in progress').")
+        ] = None,
+        include_closed: Annotated[
+            bool | None, Field(description="Include tasks in a closed/done status.")
+        ] = None,
         assignees: Annotated[
-            list[str] | None, Field(description="Filter by assignee user IDs.")
+            list[str] | None, Field(description="Filter to tasks assigned to these user IDs.")
         ] = None,
-        tags: Annotated[list[str] | None, Field(description="Filter by tag names.")] = None,
+        tags: Annotated[list[str] | None, Field(description="Filter to tasks carrying these tag names.")] = None,
         due_date_gt: Annotated[
             int | None, Field(description="Due date greater than (Unix ms timestamp).")
         ] = None,
@@ -159,6 +181,11 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         workspace) or searched_workspaces (several). Each task is projected to
         id/custom_id/name/status/status_type/priority/due_date/date_closed/url/
         list_name/space_name/team_id.
+
+        Prefer clickup_list_tasks_for_person for a simple "what's on someone's
+        plate" lookup by email/user_id; use this tool when you need
+        workspace-scoped filters (space/list/tag/date range) that tool
+        doesn't expose.
         """
         client = client_factory()
         if client is None:
@@ -278,7 +305,10 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         start_date_time: Annotated[
             bool | None, Field(description="True if start date includes time component.")
         ] = None,
-        notify_all: Annotated[bool | None, Field(description="Notify all assignees.")] = None,
+        notify_all: Annotated[
+            bool | None,
+            Field(description="Notify all assignees of the new task; omit to use ClickUp's own default."),
+        ] = None,
         parent: Annotated[
             str | None, Field(description="Parent task ID (to create a subtask).")
         ] = None,
@@ -286,7 +316,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             int | None, Field(description="Time estimate in milliseconds.")
         ] = None,
     ) -> str:
-        """Create a new task in a ClickUp list."""
+        """Create a new task in a ClickUp list.
+
+        Returns the created task object (id, name, url, status,
+        assignees[], list/folder/space, due_date/start_date). Setting
+        `parent` creates this as a subtask of that task instead of a
+        top-level task in the list.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -360,7 +396,15 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             int | None, Field(description="New time estimate in milliseconds.")
         ] = None,
     ) -> str:
-        """Update an existing ClickUp task."""
+        """Update fields on an existing ClickUp task (partial update).
+
+        Only the fields you pass are changed. Returns the updated task
+        object (id, name, status, priority, assignees[], etc.).
+        assignees_add/assignees_rem add or remove individual assignees
+        without needing to resend the full list. This tool has no
+        notify_all param — ClickUp applies its own default notification
+        behavior for assignees on update.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -425,7 +469,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         task_id: Annotated[str, Field(description="The task ID to move.")],
         list_id: Annotated[str, Field(description="The destination list ID.")],
     ) -> str:
-        """Move a ClickUp task to a different list."""
+        """Move a ClickUp task into a different list.
+
+        Returns the updated task object with its new list/folder/space.
+        The task keeps its name, assignees, and comment history; if the
+        destination list has no status matching the task's current one,
+        ClickUp resets the task's status to the destination list's default.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN

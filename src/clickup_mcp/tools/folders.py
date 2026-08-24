@@ -15,7 +15,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
     async def clickup_get_folder(
         folder_id: Annotated[str, Field(description="The folder ID.")],
     ) -> str:
-        """Get details of a ClickUp folder."""
+        """Get a ClickUp folder's metadata and the lists inside it.
+
+        Returns the raw folder object: id, name, orderindex, hidden,
+        space {id, name}, task_count (total across all its lists), and a
+        lists[] array (each with id/name/task_count). Use
+        clickup_get_folder_lists instead if you only need the lists.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -30,7 +36,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         folder_id: Annotated[str, Field(description="The folder ID.")],
         archived: Annotated[bool, Field(description="Include archived lists.")] = False,
     ) -> str:
-        """List all lists in a ClickUp folder."""
+        """List every list inside a ClickUp folder.
+
+        Returns JSON with a `lists` array; each entry has id/name/content,
+        status/priority/assignee defaults, task_count, and its statuses[]
+        workflow. archived=True includes archived lists too (excluded by
+        default).
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -45,7 +57,12 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         space_id: Annotated[str, Field(description="The space ID where the folder will be created.")],
         name: Annotated[str, Field(description="Name for the new folder.")],
     ) -> str:
-        """Create a new folder in a ClickUp space."""
+        """Create a new folder in a ClickUp space.
+
+        Returns the created folder object (id, name, orderindex, space,
+        an empty lists[]). Folders have no assignee/watcher of their own,
+        so this does not send any ClickUp notification.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
@@ -60,7 +77,12 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         folder_id: Annotated[str, Field(description="The folder ID to update.")],
         name: Annotated[str, Field(description="New name for the folder.")],
     ) -> str:
-        """Update a ClickUp folder."""
+        """Rename a ClickUp folder (the only field this endpoint updates).
+
+        Returns the updated folder object (id, name, orderindex, space,
+        lists[]). The lists and tasks inside the folder are unaffected —
+        only the folder's own name changes.
+        """
         client = client_factory()
         if client is None:
             return NO_TOKEN
