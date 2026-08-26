@@ -117,8 +117,9 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             int,
             Field(
                 description=(
-                    "Page number for pagination. Applies only when the search targets a "
-                    "single workspace; paging is handled internally otherwise."
+                    "Page number for pagination, 0-indexed (0 = first page). Applies "
+                    "only when the search targets a single workspace; paging is "
+                    "handled internally otherwise."
                 )
             ),
         ] = 0,
@@ -135,14 +136,27 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         ] = None,
         space_ids: Annotated[
             list[str] | None,
-            Field(description="Filter to these space IDs (OR'd together; ANDed with other filters)."),
+            Field(
+                description=(
+                    "Filter to these space IDs (OR'd together; ANDed with other "
+                    "filters). If you only have a space name, resolve it first via "
+                    "clickup_list_spaces."
+                )
+            ),
         ] = None,
         project_ids: Annotated[
             list[str] | None,
             Field(description="Filter to these folder IDs (ClickUp calls folders 'projects' here)."),
         ] = None,
         list_ids: Annotated[
-            list[str] | None, Field(description="Filter to these list IDs.")
+            list[str] | None,
+            Field(
+                description=(
+                    "Filter to these list IDs. If you only have a list name, "
+                    "resolve it first via clickup_get_space_lists or "
+                    "clickup_get_folder_lists."
+                )
+            ),
         ] = None,
         statuses: Annotated[
             list[str] | None, Field(description="Filter to these status names (e.g. 'in progress').")
@@ -151,7 +165,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             bool | None, Field(description="Include tasks in a closed/done status.")
         ] = None,
         assignees: Annotated[
-            list[str] | None, Field(description="Filter to tasks assigned to these user IDs.")
+            list[str] | None,
+            Field(
+                description=(
+                    "Filter to tasks assigned to these ClickUp numeric user IDs — "
+                    "not names or emails. Resolve via clickup_list_members first."
+                )
+            ),
         ] = None,
         tags: Annotated[list[str] | None, Field(description="Filter to tasks carrying these tag names.")] = None,
         due_date_gt: Annotated[
@@ -306,7 +326,17 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             Field(description="Notify all assignees of the new task; omit to use ClickUp's own default."),
         ] = None,
         parent: Annotated[
-            str | None, Field(description="Parent task ID (to create a subtask).")
+            str | None,
+            Field(
+                description=(
+                    "Parent task ID (to create a subtask) — must be ClickUp's raw "
+                    "task ID, not a custom ID like 'DEV-1234' (this tool has no "
+                    "custom_task_ids toggle). For a 'subtask of <custom-id>' "
+                    "request, first call clickup_get_task(task_id=<custom-id>, "
+                    "custom_task_ids=True) to get its raw id and list_id "
+                    "(subtasks are created in the parent's own list_id)."
+                )
+            )
         ] = None,
         time_estimate: Annotated[
             int | None, Field(description="Time estimate in milliseconds.")

@@ -99,7 +99,12 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             bool, Field(description="Required — must be set to true to proceed.")
         ] = False,
     ) -> str:
-        """Delete a ClickUp folder.
+        """Delete a ClickUp folder — permanently removes it and its contents.
+
+        Only pass confirm=true on an explicit, unambiguous delete/remove
+        instruction naming the folder. Vague retirement language ("we don't
+        need X anymore", "X is outdated") is NOT sufficient — confirm the
+        folder and intent with the user first.
 
         Destructive. Requires confirm=true.
         """

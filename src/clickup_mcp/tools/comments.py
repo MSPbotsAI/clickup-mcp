@@ -50,11 +50,12 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             int | None, Field(description="User ID to assign the task to when posting this comment.")
         ] = None,
     ) -> str:
-        """Post a new comment on a ClickUp task.
+        """Post a new comment on a ClickUp task. Creates only — cannot edit
+        or delete an existing comment; say so rather than posting a new
+        one as a workaround for an edit/delete request.
 
         Returns the created comment object (id, comment, comment_text,
-        date, user). notify_all defaults to False here, so assignees are
-        not notified unless you set it True. Passing `assignee` also
+        date, user). notify_all defaults to False; `assignee` also
         assigns the task as part of this same call.
         """
         client = client_factory()

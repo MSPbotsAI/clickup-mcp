@@ -35,12 +35,14 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             str, Field(description='Page content format: "text/md" (default) or "text/plain".')
         ] = "text/md",
     ) -> str:
-        """Get one page's content from a ClickUp Doc.
+        """Get one page's content from a ClickUp Doc. Requires doc_id and
+        page_id already known — no name/search-based resolution exists
+        here, so ask for the ID or a ClickUp link if the user only names
+        the doc (e.g. "the design doc").
 
         Returns the raw page object: id, name, content (rendered in the
         requested content_format), doc_id, parent_page_id, and
-        date_updated. Use content_format="text/plain" to strip Markdown
-        formatting out of `content`.
+        date_updated. Use content_format="text/plain" to strip Markdown.
         """
         client = client_factory()
         if client is None:
