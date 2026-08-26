@@ -1,14 +1,18 @@
 """Token-economical JSON serialization for tool return values.
 
 Compact (no indent), non-ASCII-preserving, and size-capped so a single
-tool call can never blow past the ~20,000-char budget an agent's context
-can reasonably absorb.
+tool call can never blow past the ~1,000,000-char budget an agent's
+context can reasonably absorb. Raised from the vendor-mcp SOP's default
+20,000-char cap (2026-08-26) after that limit caused a real customer
+failure: a task's subtasks[] truncated to empty for a task with 100+
+subtasks, even though every other clickup-mcp tool shares this same cap
+via dump_json_capped()'s default.
 """
 
 import json
 from typing import Any
 
-MAX_CHARS = 20_000
+MAX_CHARS = 1_000_000
 
 
 def _compact(data: Any) -> str:
