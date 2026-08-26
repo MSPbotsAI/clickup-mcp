@@ -110,11 +110,11 @@ class ClickUpClient:
     async def post(self, path: str, body: Any = None) -> Any:
         return await self._request("POST", f"{self._base_url}{path}", json_body=body)
 
-    async def put(self, path: str, body: Any = None) -> Any:
-        return await self._request("PUT", f"{self._base_url}{path}", json_body=body)
+    async def put(self, path: str, body: Any = None, params: dict | None = None) -> Any:
+        return await self._request("PUT", f"{self._base_url}{path}", params=params, json_body=body)
 
-    async def delete(self, path: str) -> Any:
-        return await self._request("DELETE", f"{self._base_url}{path}")
+    async def delete(self, path: str, params: dict | None = None) -> Any:
+        return await self._request("DELETE", f"{self._base_url}{path}", params=params)
 
     async def post_multipart(
         self, path: str, field_name: str, file_content_base64: str, filename: str, params: dict | None = None

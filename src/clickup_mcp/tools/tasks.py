@@ -16,6 +16,7 @@ from ._common import (
     project_task,
 )
 from ._teams import (
+    ambiguous_write_envelope,
     annotate,
     invalidate,
     is_team_not_authorized,
@@ -385,7 +386,23 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
 
     @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
     async def clickup_update_task(
-        task_id: Annotated[str, Field(description="The task ID to update.")],
+        task_id: Annotated[
+            str, Field(description="The task ID, or the custom ID when custom_task_ids is True.")
+        ],
+        custom_task_ids: Annotated[
+            bool,
+            Field(description='Set True to look up the task by its custom ID (e.g. "ABC-123").'),
+        ] = False,
+        team_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token when that "
+                    "token reaches exactly one workspace. Required if custom_task_ids is "
+                    "True and the token can see more than one workspace."
+                )
+            ),
+        ] = None,
         name: Annotated[str | None, Field(description="New task name.")] = None,
         description: Annotated[
             str | None, Field(description="New description (markdown supported).")
@@ -460,18 +477,47 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["archived"] = archived
         if time_estimate is not None:
             body["time_estimate"] = time_estimate
+        params: dict = {}
+        scope = None
+        if custom_task_ids:
+            # A custom ID is only unique within its workspace. This is a write, so
+            # resolve it but never probe several workspaces looking for a match —
+            # guessing wrong here would update the wrong task.
+            scope = await resolve_team_scope(client, team_id)
+            if scope.error:
+                return scope.error
+            if len(scope.team_ids) != 1:
+                return ambiguous_write_envelope(scope.teams)
+            params["custom_task_ids"] = "true"
+            params["team_id"] = scope.team_ids[0]
         try:
-            result = await client.put(f"/task/{task_id}", body)
-            return dump_json_capped(result)
+            result = await client.put(f"/task/{task_id}", body, params or None)
+            return dump_json_capped(annotate(result, scope) if scope else result)
         except ClickUpError as e:
             return e.to_envelope()
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
     async def clickup_delete_task(
-        task_id: Annotated[str, Field(description="The task ID to delete.")],
+        task_id: Annotated[
+            str, Field(description="The task ID, or the custom ID when custom_task_ids is True.")
+        ],
         confirm: Annotated[
             bool, Field(description="Required — must be set to true to proceed.")
         ] = False,
+        custom_task_ids: Annotated[
+            bool,
+            Field(description='Set True to look up the task by its custom ID (e.g. "ABC-123").'),
+        ] = False,
+        team_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token when that "
+                    "token reaches exactly one workspace. Required if custom_task_ids is "
+                    "True and the token can see more than one workspace."
+                )
+            ),
+        ] = None,
     ) -> str:
         """Delete a ClickUp task.
 
@@ -484,16 +530,45 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         client = client_factory()
         if client is None:
             return NO_TOKEN
+        params: dict = {}
+        scope = None
+        if custom_task_ids:
+            # Same write-safety rule as update/move: resolve the workspace, but
+            # never guess across several — a wrong guess here deletes the wrong task.
+            scope = await resolve_team_scope(client, team_id)
+            if scope.error:
+                return scope.error
+            if len(scope.team_ids) != 1:
+                return ambiguous_write_envelope(scope.teams)
+            params["custom_task_ids"] = "true"
+            params["team_id"] = scope.team_ids[0]
         try:
-            await client.delete(f"/task/{task_id}")
-            return dump_json_capped({"deleted": True, "task_id": task_id})
+            await client.delete(f"/task/{task_id}", params or None)
+            payload = {"deleted": True, "task_id": task_id}
+            return dump_json_capped(annotate(payload, scope) if scope else payload)
         except ClickUpError as e:
             return e.to_envelope()
 
     @mcp.tool(annotations=ToolAnnotations(idempotentHint=True))
     async def clickup_move_task(
-        task_id: Annotated[str, Field(description="The task ID to move.")],
+        task_id: Annotated[
+            str, Field(description="The task ID, or the custom ID when custom_task_ids is True.")
+        ],
         list_id: Annotated[str, Field(description="The destination list ID.")],
+        custom_task_ids: Annotated[
+            bool,
+            Field(description='Set True to look up the task by its custom ID (e.g. "ABC-123").'),
+        ] = False,
+        team_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Workspace/team ID. Optional — resolved from the API token when that "
+                    "token reaches exactly one workspace. Required if custom_task_ids is "
+                    "True and the token can see more than one workspace."
+                )
+            ),
+        ] = None,
     ) -> str:
         """Move a ClickUp task into a different list.
 
@@ -505,8 +580,20 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         client = client_factory()
         if client is None:
             return NO_TOKEN
+        params: dict = {}
+        scope = None
+        if custom_task_ids:
+            # Same write-safety rule as update/delete: resolve the workspace, but
+            # never guess across several — a wrong guess here moves the wrong task.
+            scope = await resolve_team_scope(client, team_id)
+            if scope.error:
+                return scope.error
+            if len(scope.team_ids) != 1:
+                return ambiguous_write_envelope(scope.teams)
+            params["custom_task_ids"] = "true"
+            params["team_id"] = scope.team_ids[0]
         try:
-            result = await client.put(f"/task/{task_id}", {"list": {"id": list_id}})
-            return dump_json_capped(result)
+            result = await client.put(f"/task/{task_id}", {"list": {"id": list_id}}, params or None)
+            return dump_json_capped(annotate(result, scope) if scope else result)
         except ClickUpError as e:
             return e.to_envelope()
