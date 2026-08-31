@@ -107,8 +107,10 @@ class ClickUpClient:
     async def get_v3(self, path: str, params: dict | None = None) -> Any:
         return await self._request("GET", f"{self._v3_base_url()}{path}", params=params)
 
-    async def post(self, path: str, body: Any = None) -> Any:
-        return await self._request("POST", f"{self._base_url}{path}", json_body=body)
+    async def post(self, path: str, body: Any = None, params: dict | None = None) -> Any:
+        return await self._request(
+            "POST", f"{self._base_url}{path}", params=params, json_body=body
+        )
 
     async def put(self, path: str, body: Any = None, params: dict | None = None) -> Any:
         return await self._request("PUT", f"{self._base_url}{path}", params=params, json_body=body)

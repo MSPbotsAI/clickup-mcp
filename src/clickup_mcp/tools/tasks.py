@@ -1,9 +1,10 @@
+import json
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .._json import dump_json_capped, error_envelope
 from ..api_client import ClickUpClient, ClickUpError
@@ -24,6 +25,69 @@ from ._teams import (
     resolve_team_scope,
     team_error_envelope,
 )
+
+
+class CustomFieldValue(BaseModel):
+    id: str = Field(description="ID of the custom field.")
+    value: str = Field(
+        description=(
+            "Value for the custom field, always passed as a string — the "
+            "format depends on the field type: text/url/email/phone/"
+            "dropdown (option UUID): the value directly. number/money/"
+            'rating: the number as a string (e.g. "42"). checkbox/button: '
+            '"true" or "false". labels: JSON array of UUIDs (e.g. '
+            '\'["uuid1","uuid2"]\'). relationships/people/files (e.g. the '
+            "\"0.1 Requester\" users field): JSON with add/rem arrays "
+            '(e.g. \'{"add":["id1"],"rem":["id2"]}\'). progress: JSON with '
+            'a current value (e.g. \'{"current":50}\'). date: NOT '
+            "auto-converted from a YYYY-MM-DD string — pass the epoch-"
+            'milliseconds timestamp as a numeric string (e.g. "1735689600000").'
+        )
+    )
+
+
+def _coerce_custom_field_value(value: str) -> Any:
+    """Turn a custom_fields value string into the JSON shape ClickUp's API
+    expects. Values that parse as JSON (numbers, booleans, arrays, objects —
+    covering number/money/rating/checkbox/labels/relationships/people/
+    files/progress) are sent as that parsed value; anything else (plain
+    text, URLs, emails, dropdown option UUIDs) is sent as the literal
+    string. Does NOT special-case date strings — see CustomFieldValue's
+    description.
+    """
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+
+async def _set_custom_fields(
+    client: ClickUpClient,
+    task_id: str,
+    custom_fields: list[CustomFieldValue],
+    params: dict | None,
+) -> list[dict]:
+    """Set each custom field value via ClickUp's dedicated per-field
+    endpoint (POST /task/{task_id}/field/{field_id}) — the Update/Create
+    Task endpoints' own `custom_fields` support differs (Create accepts it
+    inline; Update does not, hence this loop), so this helper is shared by
+    both tools that need to write field values after task creation.
+
+    Continues past a per-field failure rather than aborting the whole
+    call, so one bad field id doesn't block the others from being set.
+    """
+    results = []
+    for cf in custom_fields:
+        try:
+            await client.post(
+                f"/task/{task_id}/field/{cf.id}",
+                {"value": _coerce_custom_field_value(cf.value)},
+                params,
+            )
+            results.append({"id": cf.id, "status": "set"})
+        except ClickUpError as e:
+            results.append({"id": cf.id, "status": "error", "error": e.message})
+    return results
 
 
 def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -> None:
@@ -342,6 +406,18 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         time_estimate: Annotated[
             int | None, Field(description="Time estimate in milliseconds.")
         ] = None,
+        custom_fields: Annotated[
+            list[CustomFieldValue] | None,
+            Field(
+                description=(
+                    "Custom field values to set at creation time, e.g. the "
+                    '"0.1 Requester" field: [{"id": '
+                    '"024ba696-b139-459b-838f-525c73c5e965", "value": '
+                    '\'{"add":["<user id>"]}\'}]. See CustomFieldValue for '
+                    "the value-encoding rules per field type."
+                )
+            ),
+        ] = None,
     ) -> str:
         """Create a new task in a ClickUp list.
 
@@ -378,6 +454,13 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             body["parent"] = parent
         if time_estimate is not None:
             body["time_estimate"] = time_estimate
+        if custom_fields is not None:
+            # Unlike Update Task, Create Task's own endpoint accepts
+            # custom_fields inline — no separate per-field call needed here.
+            body["custom_fields"] = [
+                {"id": cf.id, "value": _coerce_custom_field_value(cf.value)}
+                for cf in custom_fields
+            ]
         try:
             result = await client.post(f"/list/{list_id}/task", body)
             return dump_json_capped(result)
@@ -438,15 +521,29 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
         time_estimate: Annotated[
             int | None, Field(description="New time estimate in milliseconds.")
         ] = None,
+        custom_fields: Annotated[
+            list[CustomFieldValue] | None,
+            Field(
+                description=(
+                    "Custom field values to set, e.g. the \"0.1 Requester\" "
+                    'field: [{"id": "024ba696-b139-459b-838f-525c73c5e965", '
+                    '"value": \'{"add":["<user id>"]}\'}]. Each field is set '
+                    "via its own upstream call, separate from the other "
+                    "fields in this same call — one bad field id does not "
+                    "block the others; check the response's "
+                    "custom_fields[].status. See CustomFieldValue for the "
+                    "value-encoding rules per field type."
+                )
+            ),
+        ] = None,
     ) -> str:
         """Update fields on an existing ClickUp task (partial update).
 
         Only the fields you pass are changed. Returns the updated task
-        object (id, name, status, priority, assignees[], etc.).
-        assignees_add/assignees_rem add or remove individual assignees
-        without needing to resend the full list. This tool has no
-        notify_all param — ClickUp applies its own default notification
-        behavior for assignees on update.
+        object, plus a custom_fields[] array (one {id, status} entry per
+        field) when custom_fields was given. assignees_add/assignees_rem
+        add or remove individual assignees without resending the full
+        list. No notify_all param — ClickUp uses its own default.
         """
         client = client_factory()
         if client is None:
@@ -492,9 +589,16 @@ def register(mcp: FastMCP, client_factory: Callable[[], ClickUpClient | None]) -
             params["team_id"] = scope.team_ids[0]
         try:
             result = await client.put(f"/task/{task_id}", body, params or None)
-            return dump_json_capped(annotate(result, scope) if scope else result)
         except ClickUpError as e:
             return e.to_envelope()
+        result = annotate(result, scope) if scope else result
+        if custom_fields is not None:
+            # Update Task's own endpoint has no custom_fields support —
+            # each field is set via ClickUp's separate per-field endpoint,
+            # continuing past individual failures (see _set_custom_fields).
+            field_results = await _set_custom_fields(client, task_id, custom_fields, params or None)
+            result = {**(result or {}), "custom_fields": field_results}
+        return dump_json_capped(result)
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
     async def clickup_delete_task(
